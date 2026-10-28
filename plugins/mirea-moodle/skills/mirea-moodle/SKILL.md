@@ -1,6 +1,6 @@
 ---
 name: mirea-moodle
-description: Use this skill whenever a task involves online-edu.mirea.ru or MIREA Moodle — logging in through Keycloak SSO with a one-time code, listing enrolled courses, browsing course folders, downloading lectures/practice files or datasets, or converting downloaded assignments to PDF. Trigger it even when the user only says «скачай методичку», «найди курс», «сделай рабочую тетрадь», «МИРЭА», or names a MIREA course/subject, because the login and download flow is non-obvious and requires the bundled script.
+description: Use this skill whenever a task involves online-edu.mirea.ru or MIREA Moodle — logging in through Keycloak SSO with a one-time code, listing enrolled courses, reading assignments (практические работы) and browsing course folders, downloading lectures/practice files or datasets, or converting downloaded assignments to PDF. Trigger it even when the user only says «скачай методичку», «найди курс», «сделай рабочую тетрадь», «МИРЭА», or names a MIREA course/subject, because the login and download flow is non-obvious and requires the bundled script.
 ---
 
 # MIREA Moodle (online-edu.mirea.ru)
@@ -42,13 +42,19 @@ bash scripts/mirea.sh check
    page. It prints the masked phone number.
 3. **Ask the user for the OTP**, then run `otp <code>`. Success prints
    `OK: вошли в Moodle` and stores the `sesskey`.
-4. **Find the course** — `courses`, then `course <course-id>` to list folders
-   and resources.
-5. **List a folder** — `folder <folder-id>` prints filenames with direct
+4. **Find the course** — `courses`, then `course <course-id>` to list every
+   activity: `FOLDER`, `file`, `ASSIGN`, `quiz`, `page`, `forum`, ….
+   **Practical-work requirements usually live in `ASSIGN` activities**
+   («Практическая работа №N …») as an attached PDF, not in folders — folders
+   may hold stale material from previous years/teachers. Check assignments
+   first and say which source you used.
+5. **Read an assignment** — `assign <assign-id>` prints the title, open/due
+   dates, the instructions text and attachment URLs (feed them to `get`).
+6. **List a folder** — `folder <folder-id>` prints filenames with direct
    `pluginfile.php` URLs.
-6. **Download** — `get '<url>' [outdir]`. The URL must be downloaded with the
+7. **Download** — `get '<url>' [outdir]`. The URL must be downloaded with the
    session cookie jar; a plain `curl` without the jar returns a login page.
-7. **Convert if needed** — `topdf file.docx [outdir]` (LibreOffice headless).
+8. **Convert if needed** — `topdf file.docx [outdir]` (LibreOffice headless).
 
 ```bash
 export KC_USER='...' KC_PASS='...'
@@ -57,6 +63,7 @@ bash scripts/mirea.sh start
 bash scripts/mirea.sh otp 123456
 bash scripts/mirea.sh courses
 bash scripts/mirea.sh course <course-id>
+bash scripts/mirea.sh assign <assign-id>
 bash scripts/mirea.sh folder <folder-id>
 bash scripts/mirea.sh get 'https://online-edu.mirea.ru/pluginfile.php/.../file.docx' downloads
 bash scripts/mirea.sh topdf downloads/file.docx downloads
@@ -66,7 +73,7 @@ bash scripts/mirea.sh topdf downloads/file.docx downloads
 
 Course and folder IDs are per-student and change between semesters. Always
 discover them: `courses` → pick the course id → `course <id>` → pick the
-folder id → `folder <id>`. Don't hardcode IDs.
+assign/folder id → `assign <id>` / `folder <id>`. Don't hardcode IDs.
 
 ## Troubleshooting
 

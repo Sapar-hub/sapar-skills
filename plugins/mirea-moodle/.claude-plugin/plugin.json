@@ -1,6 +1,6 @@
 {
   "name": "mirea-moodle",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MIREA Moodle for AI agents: Keycloak SSO + OTP login, courses, folders, downloads, docx→pdf, plus a read-only SyncShare quiz-coverage audit harness.",
   "author": {
     "name": "Sapar",

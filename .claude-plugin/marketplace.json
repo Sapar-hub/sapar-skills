@@ -9,8 +9,8 @@
     {
       "name": "mirea-moodle",
       "source": "./plugins/mirea-moodle",
-      "description": "MIREA Moodle (online-edu.mirea.ru): SSO login with OTP, courses, folders, downloads, docx→pdf; plus syncshare-audit, a read-only SyncShare quiz-coverage audit.",
-      "version": "1.1.0"
+      "description": "MIREA Moodle (online-edu.mirea.ru): SSO login with OTP, courses, assignments, folders, downloads, docx→pdf; plus syncshare-audit, a read-only SyncShare quiz-coverage audit.",
+      "version": "1.2.0"
     },
     {
       "name": "job-search",

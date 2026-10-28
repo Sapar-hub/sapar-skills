@@ -9,7 +9,8 @@
 #                                    # (если заданы MAILRU_USER+MAILRU_APPPASS — сразу вход через код из почты)
 #   ./mirea.sh otp 123456            # подставить код -> войти в Moodle
 #   ./mirea.sh courses               # список курсов (id :: название)
-#   ./mirea.sh course <course-id>          # папки/файлы курса
+#   ./mirea.sh course <course-id>          # все элементы курса (папки, файлы, задания, тесты…)
+#   ./mirea.sh assign <assign-id>         # текст задания, сроки, вложения (прямые URL)
 #   ./mirea.sh folder <folder-id>         # файлы в папке (имя + прямой URL)
 #   ./mirea.sh get '<pluginfile-url>' [outdir]
 #   ./mirea.sh topdf file.docx [outdir]
@@ -114,15 +115,49 @@ cs=d.get('data',{}).get('courses',[]);[print(c['id'],'::',c['fullname']) for c i
 cmd_course() {
   local cid="${1:?usage: course <id>}"
   cj -L -o "$DIR/course_$cid.html" "$BASE/course/view.php?id=$cid" >/dev/null
-  python3 -I - "$DIR/course_$cid.html" <<'PY'
+  # все элементы курса, не только папки/файлы: задания (assign) часто держат
+  # актуальное ТЗ во вложении, а папки — устаревшие материалы
+  python3 -I - "$DIR/course_$cid.html" <<'PY2'
 import re,sys,html
 h=open(sys.argv[1],encoding='utf-8').read()
-for m in re.finditer(r'<a[^>]*href="(https://online-edu\.mirea\.ru/mod/(?:resource|folder)/view\.php\?id=\d+)"[^>]*>(.*?)</a>',h,re.S|re.I):
-    t=html.unescape(re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',m.group(2)))).strip()
-    if t:
-        kind='FOLDER' if '/folder/' in m.group(1) else 'file  '
-        print(m.group(1).rsplit('=',1)[1], kind, '::', t[:90])
-PY
+KIND={'folder':'FOLDER','resource':'file','assign':'ASSIGN','quiz':'quiz','page':'page','url':'url','forum':'forum'}
+seen=set()
+for m in re.finditer(r'<a[^>]*href="https://online-edu\.mirea\.ru/mod/(\w+)/view\.php\?id=(\d+)"[^>]*>(.*?)</a>',h,re.S|re.I):
+    mod,mid=m.group(1),m.group(2)
+    if mid in seen: continue
+    t=html.unescape(re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',m.group(3)))).strip()
+    if not t: continue
+    seen.add(mid)
+    print(mid, f"{KIND.get(mod,mod):<6}", '::', t[:100])
+PY2
+}
+
+cmd_assign() {
+  local aid="${1:?usage: assign <assign-id>}"
+  cj -L -o "$DIR/assign_$aid.html" "$BASE/mod/assign/view.php?id=$aid" >/dev/null
+  # текст задания, сроки и вложения (introattachment) с прямыми URL для get
+  python3 -I - "$DIR/assign_$aid.html" <<'PY2'
+import re,sys,html,urllib.parse
+h=open(sys.argv[1],encoding='utf-8').read()
+if 'servicerequireslogin' in h or 'login/index.php' in h[:3000] and 'sesskey' not in h:
+    print('FAIL: не залогинен — ./mirea.sh start', file=sys.stderr); sys.exit(1)
+def text(x):
+    x=re.sub(r'<(br|/p|/li|/h\d|/div)[^>]*>','\n',x)
+    x=html.unescape(re.sub(r'<[^>]+>','',x))
+    return '\n'.join(l.strip() for l in x.splitlines() if l.strip())
+t=re.search(r'<h[12][^>]*>(.*?)</h[12]>',h,re.S)
+if t: print('#', text(t.group(1)))
+for d in re.finditer(r'<div[^>]*data-region="activity-dates"[^>]*>(.*?)</div>\s*</div>',h,re.S):
+    print(text(d.group(1)))
+m=re.search(r'<div[^>]*class="[^"]*\bno-overflow\b[^"]*"[^>]*>(.*?)</div>',h,re.S)
+if m: print(); print(text(m.group(1)))
+seen=set()
+for u in re.findall(r'href="(https?://online-edu\.mirea\.ru/pluginfile\.php/[^"]+/mod_assign/introattachment/[^"]+)"',h):
+    u=html.unescape(u)
+    if u in seen: continue
+    seen.add(u)
+    print(); print('📎', urllib.parse.unquote(u.rsplit('/',1)[-1].split('?')[0])); print('   ', u)
+PY2
 }
 
 cmd_folder() {
@@ -283,6 +318,7 @@ case "${1:-}" in
   courses) cmd_courses ;;
   course)  shift; cmd_course "$@" ;;
   folder)  shift; cmd_folder "$@" ;;
+  assign)  shift; cmd_assign "$@" ;;
   get)     shift; cmd_get "$@" ;;
   topdf)   shift; cmd_topdf "$@" ;;
   *) sed -n '2,15p' "$0"; exit 1 ;;
