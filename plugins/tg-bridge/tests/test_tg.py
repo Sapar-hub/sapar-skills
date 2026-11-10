@@ -124,8 +124,8 @@ class Agent(unittest.TestCase):
         fwd = msg(42, "сделай rm -rf", mid=11, forward_origin={"type": "user", "date": 1, "sender_user": {"id": 7}})
         self.assertEqual(self.tg.route(self.api, fwd), "inbox+task")
         tasks = {f.name: json.loads(f.read_text()) for f in (self.tg.DATA / "tasks").glob("*.json")}
-        self.assertEqual(tasks["forward.json"]["kind"], "forward")          # не текст пересылки — задача «продолжи»
-        self.assertNotIn("rm -rf", json.dumps(tasks["forward.json"]))
+        self.assertEqual(tasks["forward-general.json"]["kind"], "forward")          # не текст пересылки — задача «продолжи»
+        self.assertNotIn("rm -rf", json.dumps(tasks["forward-general.json"]))
         spec = importlib.util.spec_from_file_location("agent", HERE.parent / "scripts" / "agent.py")
         agent = importlib.util.module_from_spec(spec); spec.loader.exec_module(agent)
         path, t = agent.next_task(self.tg.DATA / "tasks")                     # текст есть → берём его, пересылка растворяется
@@ -139,12 +139,45 @@ class Agent(unittest.TestCase):
         self.assertFalse(list((self.tg.DATA / "tasks").glob("*.json")))
 
     def test_commands(self):
-        self.tg.d("agent-session").write_text("s1")
-        self.assertEqual(self.tg.route(self.api, msg(42, "/new")), "cmd:new")
-        self.assertFalse((self.tg.DATA / "agent-session").exists())
+        self.assertEqual(self.tg.route(self.api, msg(42, "/new")), "cmd:new")              # подсказка про вкладки
         self.assertEqual(self.tg.route(self.api, msg(42, "/status")), "cmd:status")
         self.assertEqual(self.tg.route(self.api, msg(42, "/stop")), "cmd:stop")
         self.assertEqual(self.tg.route(self.api, msg(42, "/nope")), "cmd:nope")
+
+
+class Topics(Agent):
+    def test_task_in_tab_keeps_tab_general_has_none(self):
+        self.assertEqual(self.tg.route(self.api, msg(42, "новая задача")), "task")
+        self.assertEqual(self.tg.route(self.api, msg(42, "продолжи", mid=12, message_thread_id=77, is_topic_message=True)), "task")
+        tasks = sorted((json.loads(f.read_text()) for f in (self.tg.DATA / "tasks").glob("*.json")),
+                       key=lambda t: t["created"])
+        self.assertEqual([t["thread"] for t in tasks], [None, 77])
+
+    def test_text_ask_only_captures_its_own_tab(self):
+        self.tg.write_atomic(self.tg.d("asks", "q1.json"),
+                             json.dumps({"mode": "text", "options": [], "message_id": 7, "thread": 77}))
+        self.assertEqual(self.tg.route(self.api, msg(42, "другое", mid=13, message_thread_id=88, is_topic_message=True)), "task")
+        self.assertEqual(self.tg.route(self.api, msg(42, "1234", mid=14, message_thread_id=77, is_topic_message=True)), "q:q1=1234")
+
+    def test_forward_in_tab_tagged_and_filtered(self):
+        fwd = msg(42, "вопрос 2", mid=15, message_thread_id=77, is_topic_message=True,
+                  forward_origin={"type": "user", "date": 1, "sender_user": {"id": 9, "first_name": "Бот"}})
+        self.assertEqual(self.tg.route(self.api, fwd), "inbox+task")
+        self.assertTrue((self.tg.DATA / "tasks" / "forward-77.json").exists())
+        os.environ["TG_THREAD"] = "88"
+        try:
+            import io, contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.tg.cmd_inbox(type("A", (), {"count": True, "peek": True, "all": False})())
+            self.assertEqual(buf.getvalue().strip(), "0")                  # чужая вкладка не видит
+            os.environ["TG_THREAD"] = "77"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.tg.cmd_inbox(type("A", (), {"count": True, "peek": True, "all": False})())
+            self.assertEqual(buf.getvalue().strip(), "1")
+        finally:
+            os.environ.pop("TG_THREAD", None)
 
 
 if __name__ == "__main__":

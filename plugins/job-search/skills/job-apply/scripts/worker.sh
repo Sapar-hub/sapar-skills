@@ -45,6 +45,15 @@ run_one() {
   title=$($Q show "$key" | python3 -I -c 'import json,sys; r=json.load(sys.stdin); print((r["title"] or r["key"])[:80])')
   $Q set "$key" in-progress >/dev/null
   cd "$SKILL"
+  # своя вкладка в чате с ботом на каждый отклик (та же — при продолжении paused); в ней же потом можно продолжить
+  # разговор: раннер задач tg-bridge возьмёт сессию из sessions/<вкладка> и cwd отсюда
+  TG_THREAD=$(python3 -I -c 'import json,sys,os; p=os.path.expanduser("~/.local/share/tg-bridge/threads.json")
+t=json.load(open(p)) if os.path.exists(p) else {}
+print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))' "$key")
+  [ -n "$TG_THREAD" ] || TG_THREAD=$("$TG" topic "$title" --kind "apply:$key" --cwd "$SKILL" 2>/dev/null || true)
+  export TG_THREAD
+  SESS="$HOME/.local/share/tg-bridge/sessions/${TG_THREAD:-apply-$key}"
+  mkdir -p "$(dirname "$SESS")"
   # stream-json → progress.py: одно сообщение в Telegram, которое обновляется по ходу и становится итогом
   # через fish: config.fish экспортирует креды (KC_*, MAILRU_*, прокси), которых нет в окружении systemd --user
   "${LOGIN_SHELL[@]}" "$CLAUDE" -p "Скилл job-apply, headless-режим. Сначала прочитай references/auto-apply.md и SKILL.md, \
@@ -53,7 +62,7 @@ run_one() {
     --output-format stream-json --verbose \
     --permission-mode acceptEdits --allowedTools "${ALLOWED[@]}" \
     --add-dir "$H" --add-dir "$CONF" 2>&1 </dev/null \
-    | "$TG" progress --title "$title" --log "$log" >"$out"
+    | "$TG" progress --title "$title" --log "$log" --session-file "$SESS" >"$out"
   line=$(grep -E '^STATUS: (done|skipped|paused|failed|bl-done)' "$out" | tail -1)
   status=$(printf '%s' "$line" | awk '{print $2}')
   [ -n "$status" ] || { status=failed; line="STATUS: failed — агент не вернул статус"; }

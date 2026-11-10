@@ -48,13 +48,18 @@ tg whoami
 ## Tasks from the chat (remote mode)
 
 With `~/.config/tg-bridge/agent.json` present, the user's own text in the bot chat becomes a task. Forwards, files
-and photos stay as inbox data, but they also queue a «continue» task 15 s later. A text written within
-those 15 s replaces it, so «forward several messages, then say what to do» runs as one task, while a bare forward continues
-the session (for example, the next screening question the agent asked to see). `scripts/agent.py` runs one task at a time with `claude -p`. Its live status is one
-message replying to the task, and that message becomes the final answer. A lock is shared with the job-apply worker,
-because there is only one browser. The next message continues the same session (`--resume`). Bot commands: `/status`,
-`/stop`, `/new`, `/inbox`, plus any registered action without `{arg}`, which becomes `/<name>`. Rules for the run are in
-[references/remote.md](references/remote.md). The runner is a child of the daemon, so restarting `tg-bridge` aborts a running task.
+and photos stay as inbox data, and they also queue a «continue» task 15 s later (text written in that window replaces it).
+The bot has Threaded Mode on, and **one tab (topic) is one task with its own session**:
+- Text in the general chat → `agent.py` opens a new tab named after the task (`createForumTopic`) and starts a fresh
+  session there. Forwards sent to the general chat move into that tab.
+- Text or forwards inside a tab → that tab's session continues (`sessions/<thread>`, `--resume`, the tab's `cwd` from `threads.json`).
+- Each job-apply worker run gets its own tab (`tg topic … --kind apply:<key>`). The user can keep talking in it afterwards.
+- `TG_THREAD` in the environment routes `send`/`ask`/`edit`/`progress` into the tab, and makes `inbox` return that tab's items only
+  (`--all` returns every tab). A deleted tab falls back to the general chat.
+
+One task runs at a time, under a lock shared with the job-apply worker. Commands: `/status`, `/stop`, `/inbox`, plus any
+registered action without `{arg}` as `/<name>`. Rules for a run: [references/remote.md](references/remote.md). The runner is a child of
+the daemon, so restarting `tg-bridge` aborts a running task.
 
 ## Setup and debug
 

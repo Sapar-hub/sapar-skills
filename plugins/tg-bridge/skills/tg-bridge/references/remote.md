@@ -13,7 +13,9 @@ replaces that message, so it is the only thing the user reads.
 - Write a short, clear `description` on every Bash call. It becomes a line in the live status.
 - The final answer is plain, minimal text: 2–8 lines, no emoji, no markdown tables, no headings. Give the result,
   the links and files, and what's next. If you stopped, say why and what the user should do.
-- The session continues across messages («а теперь …» refers to the previous task). `/new` resets it.
+- You run inside one Telegram tab (`TG_THREAD` is set): `tg send/ask/inbox` stay in it automatically. The session
+  continues while the user writes in this tab («а теперь …» refers to earlier messages here). A new task in the general
+  chat gets its own tab and a fresh session.
 
 ## Doing
 

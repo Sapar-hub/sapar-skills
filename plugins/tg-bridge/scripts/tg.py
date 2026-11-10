@@ -10,6 +10,7 @@
   tg action add NAME -- argv... {arg}        кнопка "label=NAME:arg" запускает argv без shell
   tg action list | tg action rm NAME
   tg whoami                                  проверка токена и привязанного чата
+  tg topic NAME [--cwd DIR] [--kind K]       новая вкладка (Threaded Mode), печатает id для TG_THREAD
   tg progress --title T --log F [...]        живой статус прогона из stream-json (см. progress.py)
 
 Задачи из чата: если есть ~/.config/tg-bridge/agent.json, обычный текст пользователя (не пересланный)
@@ -121,12 +122,48 @@ def multipart(params, files):
 
 # --- отправка ---
 
+def env_thread():
+    """Вкладка (топик) текущего прогона: агент и worker получают её через TG_THREAD — send/ask/edit/inbox идут туда."""
+    v = os.environ.get("TG_THREAD", "").strip()
+    return int(v) if v.isdigit() else None
+
+
+def threads():
+    f = DATA / "threads.json"
+    return json.loads(f.read_text()) if f.exists() else {}
+
+
+def save_thread(tid, **info):
+    t = threads()
+    t[str(tid)] = {**t.get(str(tid), {}), **info}
+    write_atomic(d("threads.json"), json.dumps(t, ensure_ascii=False, indent=1))
+
+
+def create_topic(api, name, **info):
+    """Новая вкладка в личке с ботом (Threaded Mode). -> message_thread_id"""
+    name = " ".join(name.split())[:120] or "задача"
+    r = api.call("createForumTopic", chat_id=chat_id(), name=name)
+    save_thread(r["message_thread_id"], name=name, created=time.time(), **info)
+    return r["message_thread_id"]
+
+
 def keyboard(rows):
     return {"inline_keyboard": rows} if rows else None
 
 
-def deliver(api, text, html=False, photo=None, doc=None, markup=None, reply_to=None):
-    """Одно логическое сообщение. Клавиатура — на последнем куске. -> (message_id, kind)."""
+def deliver(api, text, html=False, photo=None, doc=None, markup=None, reply_to=None, thread=None):
+    """Одно логическое сообщение. Клавиатура — на последнем куске. -> (message_id, kind).
+    thread: вкладка; по умолчанию TG_THREAD. Вкладку удалили — шлём в общий чат."""
+    thread = thread if thread is not None else env_thread()
+    try:
+        return _deliver(api, text, html, photo, doc, markup, reply_to, thread)
+    except RuntimeError as e:
+        if thread and "thread not found" in str(e).lower():
+            return _deliver(api, text, html, photo, doc, markup, None, None)
+        raise
+
+
+def _deliver(api, text, html, photo, doc, markup, reply_to, thread):
     cid = chat_id() or die("чат не привязан: напиши боту /start при запущенном `tg daemon`")
     mode = "HTML" if html else None
     if len(text) > MAX_TEXT and not doc:                       # длинный текст — файлом
@@ -137,11 +174,13 @@ def deliver(api, text, html=False, photo=None, doc=None, markup=None, reply_to=N
     if media:
         cap_fits = len(text) <= MAX_CAPTION
         m = api.call(media[0], files={media[1]: media[2]}, chat_id=cid, reply_to_message_id=reply_to,
+                     message_thread_id=thread,
                      caption=text if cap_fits else None, parse_mode=mode if cap_fits else None,
                      reply_markup=markup if cap_fits else None)
         if cap_fits:
             return m["message_id"], "caption"
     m = api.call("sendMessage", chat_id=cid, text=text or "—", parse_mode=mode, reply_markup=markup,
+                 message_thread_id=thread,
                  link_preview_options={"is_disabled": True},
                  reply_parameters={"message_id": int(reply_to), "allow_sending_without_reply": True} if reply_to else None)
     return m["message_id"], "text"
@@ -223,7 +262,7 @@ def append_line(api, m, line, markup=None):
 
 def save_inbox(api, msg):
     item = {"untrusted": True, "date": msg.get("date"), "message_id": msg["message_id"],
-            "text": msg.get("text") or msg.get("caption") or ""}
+            "thread": msg_thread(msg), "text": msg.get("text") or msg.get("caption") or ""}
     fo = msg.get("forward_origin")
     if fo:
         src = fo.get("sender_user") or fo.get("chat") or {}
@@ -254,6 +293,10 @@ def save_inbox(api, msg):
         item["files"] = files
     write_atomic(d("inbox", f"{time.time():.3f}-{msg['message_id']}.json"), json.dumps(item, ensure_ascii=False))
     return item
+
+
+def msg_thread(msg):
+    return msg.get("message_thread_id") if msg.get("is_topic_message") else None
 
 
 def route(api, upd):
@@ -294,6 +337,7 @@ def route(api, upd):
                 append_line(api, m, f"{btn['label']}: {note or 'ок'}", {"inline_keyboard": [r for r in rows if r]})
             else:
                 api.call("sendMessage", chat_id=me, reply_to_message_id=m["message_id"],
+                         message_thread_id=m.get("message_thread_id") if m.get("is_topic_message") else None,
                          text=f"{btn['action']} {btn['arg']}: ошибка, код {code}" + (f"\n{out[-800:]}" if out else ""))
             return f"a:{btn['action']}:{code}"
         return "drop:unknown-callback"
@@ -313,8 +357,10 @@ def route(api, upd):
     if cid != me:
         return "drop:foreign"
 
+    thread = msg_thread(msg)
     asks = pending_asks()
-    text_asks = {q: x for q, x in asks.items() if x["mode"] == "text" and not (DATA / "answers" / q).exists()}
+    text_asks = {q: x for q, x in asks.items() if x["mode"] == "text" and x.get("thread") == thread
+                 and not (DATA / "answers" / q).exists()}
     reply_to = (msg.get("reply_to_message") or {}).get("message_id")
     target = next((q for q, x in asks.items() if x.get("message_id") == reply_to), None) if reply_to else None
     if target is None and len(text_asks) == 1 and text and not msg.get("forward_origin"):
@@ -327,28 +373,29 @@ def route(api, upd):
         return command(api, me, msg, text)
     agent = load_agent()
     if agent and text and not msg.get("forward_origin"):          # свой текст = задача агенту
-        enqueue_task(api, me, msg, text)
+        enqueue_task(api, me, msg, text, thread)                  # в общем чате — новая вкладка, во вкладке — её сессия
         return "task"
     save_inbox(api, msg)                                          # пересланное, файлы, фото = данные
     react(api, me, msg["message_id"])
     if agent:                                                     # …но и повод продолжить: агент сам заберёт inbox
-        enqueue_forward(msg)
+        enqueue_forward(msg, thread)
         return "inbox+task"
     return "inbox"
 
 
 # --- команды бота и задачи агенту ---
 
-HELP = """Пиши задачу обычным текстом: агент возьмёт её в работу, ход будет виден в одном сообщении.
-Пересланное и файлы уходят в inbox как данные; перешли, потом напиши, что с этим сделать.
-Следующее сообщение продолжает ту же сессию; /new начинает заново.
+HELP = """Одна вкладка = одна задача со своим контекстом.
 
-/status — что сейчас идёт и что в очереди
+Написал в общем чате — бот откроет новую вкладку и начнёт там с чистого листа.
+Написал или переслал внутри вкладки — продолжение этой задачи.
+Пересланное и файлы — данные: перешли, потом напиши, что с этим сделать (или ничего: через 15 с агент продолжит сам).
+Каждый автоотклик тоже идёт в своей вкладке; в ней же можно продолжить разговор.
+
+/status — что идёт и что в очереди
 /stop — прервать текущий прогон
-/new — новая сессия агента
 /inbox — непрочитанное"""
-COMMANDS = [("status", "что идёт и что в очереди"), ("stop", "прервать прогон"), ("new", "новая сессия агента"),
-            ("inbox", "непрочитанное")]
+COMMANDS = [("status", "что идёт и что в очереди"), ("stop", "прервать прогон"), ("inbox", "непрочитанное")]
 
 
 def load_agent():
@@ -378,36 +425,37 @@ def start_runner():
     return True
 
 
-def enqueue_forward(msg):
+def enqueue_forward(msg, thread=None):
     """Пересылка без текста — задача «продолжи», с задержкой: текст следом её заменит (agent.py склеивает)."""
-    f = d("tasks", "forward.json")                                # одна на пачку пересылок; каждая сдвигает срок
+    f = d("tasks", f"forward-{thread or 'general'}.json")         # одна на пачку пересылок во вкладке
     task = json.loads(f.read_text()) if f.exists() else {"kind": "forward", "message_id": msg["message_id"],
-                                                          "created": time.time(), "count": 0}
+                                                          "thread": thread, "created": time.time(), "count": 0}
     task.update(not_before=time.time() + FORWARD_WAIT, count=task["count"] + 1, last_message_id=msg["message_id"])
     write_atomic(f, json.dumps(task, ensure_ascii=False))
     start_runner()
 
 
-def enqueue_task(api, me, msg, text):
-    task = {"text": text, "message_id": msg["message_id"], "date": msg.get("date"), "created": time.time()}
-    write_atomic(d("tasks", f"{time.time():.3f}.json"), json.dumps(task, ensure_ascii=False))
+def enqueue_task(api, me, msg, text, thread=None):
+    task = {"text": text, "message_id": msg["message_id"], "thread": thread, "date": msg.get("date"),
+            "created": time.time()}
+    write_atomic(d("tasks", f"{time.time():.6f}-{msg['message_id']}.json"), json.dumps(task, ensure_ascii=False))
     react(api, me, msg["message_id"], "👀")
     cur = DATA / "agent-current.json"
     if not start_runner() and cur.exists():
-        api.call("sendMessage", chat_id=me, text="В очереди, после текущего прогона.",
+        api.call("sendMessage", chat_id=me, text="В очереди, после текущего прогона.", message_thread_id=thread,
                  reply_parameters={"message_id": msg["message_id"]})
 
 
 def command(api, me, msg, text):
     name = text[1:].split()[0].split("@")[0]
-    say = lambda t: api.call("sendMessage", chat_id=me, text=t, link_preview_options={"is_disabled": True})
+    say = lambda t: api.call("sendMessage", chat_id=me, text=t, message_thread_id=msg_thread(msg),
+                             link_preview_options={"is_disabled": True})
     if name in ("start", "help"):
         say(HELP if load_agent() else "Пересылай сообщения и файлы — уйдут в inbox. /inbox — что там.")
     elif name == "inbox":
         say(inbox_summary())
     elif name == "new":
-        (DATA / "agent-session").unlink(missing_ok=True)
-        say("Новая сессия: следующая задача начнётся с чистого контекста.")
+        say("Новая задача — просто напиши её в общем чате: бот откроет для неё новую вкладку.")
     elif name == "stop":
         pid = runner_pid()
         if pid:
@@ -422,13 +470,14 @@ def command(api, me, msg, text):
         lines = []
         if runner_pid() and cur.exists():
             c = json.loads(cur.read_text())
-            lines.append(f"Идёт ({int((time.time() - c['started']) // 60)} мин): {c['text'][:120]}")
+            tab = threads().get(str(c.get("thread")), {}).get("name")
+            lines.append(f"Идёт ({int((time.time() - c['started']) // 60)} мин){', вкладка «' + tab + '»' if tab else ''}: "
+                         f"{(c.get('title') or c.get('text') or '')[:120]}")
         else:
             lines.append("Сейчас ничего не идёт.")
         if tasks:
             lines.append(f"\nВ очереди: {len(tasks)}")
             lines += [f"- {json.loads(t.read_text()).get('text') or 'пересланное'}"[:82] for t in tasks[:10]]
-        lines.append("\nСессия: " + ("продолжается" if (DATA / "agent-session").exists() else "новая"))
         say("\n".join(lines))
     elif name in load_actions() and not any("{arg}" in x for x in load_actions()[name]):
         code, out = run_action(name, "")                          # /queue и т.п. — action без аргумента
@@ -545,7 +594,8 @@ def cmd_ask(a):
     else:
         rows = [{"text": o, "callback_data": f"q:{qid}:{i}"} for i, o in enumerate(options)]
         markup = keyboard([rows] if sum(len(o) for o in options) <= 30 else [[r] for r in rows])
-    ask = {"mode": "text" if a.text_mode else "buttons", "options": options, "created": time.time()}
+    ask = {"mode": "text" if a.text_mode else "buttons", "options": options, "created": time.time(),
+           "thread": env_thread()}
     write_atomic(d("asks", f"{qid}.json"), json.dumps(ask, ensure_ascii=False))   # до отправки: ответ может прийти сразу
     text = (a.question or "") + ("\n\n(ответь реплаем)" if a.text_mode else "")
     mid, kind = deliver(api, text, a.html, a.photo, None, markup)
@@ -587,6 +637,9 @@ def cmd_ask(a):
 
 def cmd_inbox(a):
     files = sorted(d("inbox", "x").parent.glob("*.json"))
+    t = env_thread()
+    if t is not None and not a.all:                               # во вкладке — только пересланное в неё
+        files = [f for f in files if json.loads(f.read_text(encoding="utf-8")).get("thread") == t]
     if a.count:
         print(len(files))
         return
@@ -618,6 +671,11 @@ def cmd_action(a):
     print(f"OK: {a.op} {a.name}")
 
 
+def cmd_topic(a):
+    """Новая вкладка; печатает её id (export TG_THREAD=…). --cwd: где продолжать сессию этой вкладки."""
+    print(create_topic(Api(), a.name, **({"cwd": a.cwd} if a.cwd else {}), kind=a.kind))
+
+
 def cmd_whoami(a):
     me = Api().call("getMe")
     print(f"@{me['username']}  chat={chat_id() or 'не привязан'}")
@@ -633,6 +691,8 @@ def main():
     sp = ap.add_subparsers(dest="cmd", required=True)
     sp.add_parser("daemon").set_defaults(f=cmd_daemon)
     sp.add_parser("whoami").set_defaults(f=cmd_whoami)
+    tp = sp.add_parser("topic"); tp.add_argument("name"); tp.add_argument("--cwd"); tp.add_argument("--kind", default="task")
+    tp.set_defaults(f=cmd_topic)
     s = sp.add_parser("send")
     s.add_argument("text", nargs="?")
     s.add_argument("--stdin", action="store_true")
@@ -656,6 +716,7 @@ def main():
     q.set_defaults(f=cmd_ask)
     i = sp.add_parser("inbox")
     i.add_argument("--peek", action="store_true"); i.add_argument("--count", action="store_true")
+    i.add_argument("--all", action="store_true", help="все вкладки, а не только TG_THREAD")
     i.set_defaults(f=cmd_inbox)
     ac = sp.add_parser("action")
     ac.add_argument("op", choices=["add", "list", "rm"]); ac.add_argument("name", nargs="?")
