@@ -139,7 +139,8 @@ def run(cfg, task, key):
                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
             info.write_text(json.dumps({"thread": tid, "title": title, "started": time.time(), "pgid": claude.pid},
                                        ensure_ascii=False))
-            subprocess.run([*TG, "progress", "--title", title, "--log", str(log), "--freeform",
+            # без шапки: статус — ответ на сообщение с задачей или первое сообщение вкладки, названной по задаче
+            subprocess.run([*TG, "progress", "--log", str(log), "--freeform",
                             "--session-file", str(sess_file),
                             *(["--reply-to", str(task["message_id"])] if in_tab or not tid else [])],
                            stdin=claude.stdout, capture_output=True, text=True, env=env)

@@ -22,7 +22,7 @@
       "name": "tg-bridge",
       "source": "./plugins/tg-bridge",
       "description": "Telegram bot as the human-in-the-loop channel: blocking ask with buttons/text reply, notifications, inbox for forwarded messages, one-tap buttons running whitelisted commands.",
-      "version": "0.4.0"
+      "version": "0.4.1"
     }
   ]
 }

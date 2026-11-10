@@ -67,7 +67,7 @@ def mmss(sec):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--title", required=True)
+    ap.add_argument("--title", default="", help="шапка статуса; пусто — без шапки (статус и так ответом на задачу)")
     ap.add_argument("--log", required=True)
     ap.add_argument("--freeform", action="store_true")
     ap.add_argument("--session-file")
@@ -75,11 +75,11 @@ def main():
     a = ap.parse_args()
     log = open(a.log, "w", encoding="utf-8")
     t0, steps, last_edit, result = time.time(), [], 0.0, None
-    title = f"<b>{html.escape(a.title)}</b>"
-    mid = tg("send", "--html", f"{title}\nзапуск", *(["--reply-to", a.reply_to] if a.reply_to else []))
+    title = f"<b>{html.escape(a.title)}</b>\n" if a.title else ""
+    mid = tg("send", "--html", f"{title}запуск", *(["--reply-to", a.reply_to] if a.reply_to else []))
 
     def render():
-        lines = [f"{title}\nидёт, {mmss(time.time() - t0)}, шагов {len(steps)}", ""]
+        lines = [f"{title}идёт, {mmss(time.time() - t0)}, шагов {len(steps)}", ""]
         lines += [f"· {html.escape(s)}" for s in steps[-LAST_STEPS:]]
         return "\n".join(lines)
 
@@ -109,7 +109,7 @@ def main():
         ("агент не вернул итог" if result else "прогон оборвался, итога нет")
     if result and result.get("is_error"):
         status = "failed"
-    head = f"{title}\n{WORDS.get(status, status)}, {mmss(time.time() - t0)}, шагов {len(steps)}"
+    head = f"{title}{WORDS.get(status, status)}, {mmss(time.time() - t0)}, шагов {len(steps)}"
     final = f"{head}\n\n{html.escape(summary)}"
     if mid:
         if len(final) > 4000:
