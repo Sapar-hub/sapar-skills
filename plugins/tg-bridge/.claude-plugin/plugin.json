@@ -1,6 +1,6 @@
 {
   "name": "tg-bridge",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Telegram bot as the human-in-the-loop channel for agents: blocking questions with buttons or a text reply (submit gates, SMS codes), notifications, an inbox for forwarded messages and files, and one-tap buttons that run whitelisted local commands.",
   "author": {
     "name": "Sapar",

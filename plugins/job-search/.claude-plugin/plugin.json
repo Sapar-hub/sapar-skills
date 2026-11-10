@@ -1,6 +1,6 @@
 {
   "name": "job-search",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Job search for AI agents: daily vacancy digest from Telegram/RSS into Mail.ru, applying on employers' own career sites with a tailored resume, and reaching recruiters and team leads directly from public sources.",
   "author": {
     "name": "Sapar",

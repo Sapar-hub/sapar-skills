@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Outbox для job_tracker: строки, которые нужно записать в Google Sheets, когда это будет возможно.
 
-Headless-прогон (claude -p) коннекторов claude.ai не видит, поэтому пишет строку сюда, а интерактивная
-сессия (там Google Sheets есть) переносит её в лист Applications и помечает done.
+Headless-прогон (claude -p) коннекторов claude.ai не видит. `add` сначала пишет в лист сам через
+Apps Script (sheet.py, если настроен), иначе кладёт строку сюда, а интерактивная сессия переносит её
+(или `sheet.py flush`, когда web app появится) и помечает done.
 
-  tracker.py add < row.json        объект {"A": …, …, "N": …} или список из 14 значений
+  tracker.py add [--outbox] < row.json   объект {"A": …, …, "N": …} или список из 14 значений
   tracker.py pending [--count]     что ждёт записи (JSON-строки с id)
   tracker.py done <id>...          записано в лист → убрать из outbox
 
@@ -32,7 +33,7 @@ def save(items):
 def main():
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest="cmd", required=True)
-    sp.add_parser("add")
+    ad = sp.add_parser("add"); ad.add_argument("--outbox", action="store_true", help="не пробовать лист")
     p = sp.add_parser("pending"); p.add_argument("--count", action="store_true")
     d = sp.add_parser("done"); d.add_argument("ids", nargs="+")
     a = ap.parse_args()
@@ -42,6 +43,16 @@ def main():
         row = [str(data.get(c, "")) for c in COLS] if isinstance(data, dict) else [str(x) for x in data]
         if len(row) != 14 or not all(row[:3]):
             sys.exit("ERR: нужны 14 колонок A–N, и A (компания), B (роль), C (дата) не пустые")
+        if not a.outbox:
+            sys.path.insert(0, str(Path(__file__).parent))
+            import sheet
+            if sheet.conf():
+                try:
+                    res = sheet.call("append", row=row)
+                    print(f"job_tracker: {'уже есть' if res.get('duplicate') else 'записано'}, строка {res['row']}")
+                    return
+                except (Exception, SystemExit) as e:          # сеть/скрипт упали — не теряем строку
+                    print(f"WARN: лист недоступен ({e}), кладу в outbox", file=sys.stderr)
         F.parent.mkdir(parents=True, exist_ok=True)
         item = {"id": time.strftime("%Y%m%d%H%M%S"), "row": row}
         save(items + [item])

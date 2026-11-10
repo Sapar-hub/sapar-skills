@@ -53,9 +53,10 @@ site (SKILL.md, «Employer's site only»). If you can't find it there, it's `ski
    - `no_confirm` only skips the question. The shot and the PDF still go out (with `tg send`), after the submit.
 5. **After submit.** Do everything SKILL.md requires: applied.tsv, the job_tracker row with columns A–N filled, and the hh second channel
    if the vacancy is there too. Each hh step has its own gate.
-   - **Tracker.** This run has no Google Sheets access (claude.ai connectors are not loaded in `claude -p`).
-     Put the full row into the outbox instead: `python3 -I scripts/tracker.py add` with a JSON object `{"A": …, "N": …}`
-     on stdin, with all 14 columns as SKILL.md describes. L must hold every questionnaire field with its value, exactly
+   - **Tracker.** This run has no Google Sheets connector (claude.ai connectors are not loaded in `claude -p`).
+     Write the row with `python3 -I scripts/tracker.py add` and a JSON object `{"A": …, "N": …}` on stdin, with all
+     14 columns as SKILL.md describes. It goes straight into the sheet through the Apps Script web app, or into the outbox
+     when the web app is not set up. L must hold every questionnaire field with its value, exactly
      as filled. The next interactive session moves it into the sheet.
 6. **Report.** Your final answer is the report. The worker puts it into the status message in Telegram, so don't
    `tg send` it again. Keep it to 3–6 plain lines: what was done, the link, the resume file, risks, and what's next.

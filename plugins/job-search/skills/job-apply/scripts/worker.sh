@@ -50,7 +50,7 @@ run_one() {
     --output-format stream-json --verbose \
     --permission-mode acceptEdits --allowedTools "${ALLOWED[@]}" \
     --add-dir "$H" --add-dir "$CONF" 2>&1 </dev/null \
-    | python3 -I "$SCRIPTS/progress.py" --title "$title" --log "$log" >"$out"
+    | "$TG" progress --title "$title" --log "$log" >"$out"
   line=$(grep -E '^STATUS: (done|skipped|paused|failed|bl-done)' "$out" | tail -1)
   status=$(printf '%s' "$line" | awk '{print $2}')
   [ -n "$status" ] || { status=failed; line="STATUS: failed — агент не вернул статус"; }

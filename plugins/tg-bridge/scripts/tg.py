@@ -10,6 +10,10 @@
   tg action add NAME -- argv... {arg}        кнопка "label=NAME:arg" запускает argv без shell
   tg action list | tg action rm NAME
   tg whoami                                  проверка токена и привязанного чата
+  tg progress --title T --log F [...]        живой статус прогона из stream-json (см. progress.py)
+
+Задачи из чата: если есть ~/.config/tg-bridge/agent.json, обычный текст пользователя (не пересланный)
+становится задачей агенту: scripts/agent.py запускает её и показывает ход в одном сообщении.
 
 Конфиг: $TG_BRIDGE_CONFIG (~/.config/tg-bridge): env (TG_TOKEN, TG_PROXY), chat, actions.json
 Данные: $TG_BRIDGE_DATA (~/.local/share/tg-bridge): state.json, asks/, answers/, btn/, inbox/
@@ -121,7 +125,7 @@ def keyboard(rows):
     return {"inline_keyboard": rows} if rows else None
 
 
-def deliver(api, text, html=False, photo=None, doc=None, markup=None):
+def deliver(api, text, html=False, photo=None, doc=None, markup=None, reply_to=None):
     """Одно логическое сообщение. Клавиатура — на последнем куске. -> (message_id, kind)."""
     cid = chat_id() or die("чат не привязан: напиши боту /start при запущенном `tg daemon`")
     mode = "HTML" if html else None
@@ -132,13 +136,14 @@ def deliver(api, text, html=False, photo=None, doc=None, markup=None):
     media = ("sendPhoto", "photo", photo) if photo else ("sendDocument", "document", doc) if doc else None
     if media:
         cap_fits = len(text) <= MAX_CAPTION
-        m = api.call(media[0], files={media[1]: media[2]}, chat_id=cid,
+        m = api.call(media[0], files={media[1]: media[2]}, chat_id=cid, reply_to_message_id=reply_to,
                      caption=text if cap_fits else None, parse_mode=mode if cap_fits else None,
                      reply_markup=markup if cap_fits else None)
         if cap_fits:
             return m["message_id"], "caption"
-    m = api.call("sendMessage", chat_id=cid, text=text or "—", parse_mode=mode,
-                 reply_markup=markup, link_preview_options={"is_disabled": True})
+    m = api.call("sendMessage", chat_id=cid, text=text or "—", parse_mode=mode, reply_markup=markup,
+                 link_preview_options={"is_disabled": True},
+                 reply_parameters={"message_id": int(reply_to), "allow_sending_without_reply": True} if reply_to else None)
     return m["message_id"], "text"
 
 
@@ -161,7 +166,7 @@ def cmd_send(a):
     flat = [r[0] for r in rows]
     cols = a.cols or (4 if all(len(b["text"]) <= 14 for b in flat) else 1)   # короткие кнопки — по 4 в ряд
     rows = [flat[i:i + cols] for i in range(0, len(flat), cols)]
-    mid, _ = deliver(Api(), text, a.html, a.photo, a.doc, keyboard(rows))
+    mid, _ = deliver(Api(), text, a.html, a.photo, a.doc, keyboard(rows), a.reply_to)
     print(mid)
 
 
@@ -318,16 +323,97 @@ def route(api, upd):
         answer(target, text)
         react(api, me, msg["message_id"])
         return f"q:{target}={text}"
-    if text in ("/start", "/help"):
-        api.call("sendMessage", chat_id=me, text="Уже привязано. Пересылай сообщения и файлы — уйдут в inbox; "
-                 "/inbox — сколько там.")
-        return "cmd:help"
-    if text == "/inbox":
-        api.call("sendMessage", chat_id=me, text=inbox_summary(), link_preview_options={"is_disabled": True})
-        return "cmd:inbox"
-    save_inbox(api, msg)
+    if text.startswith("/"):
+        return command(api, me, msg, text)
+    agent = load_agent()
+    if agent and text and not msg.get("forward_origin"):          # свой текст = задача агенту
+        enqueue_task(api, me, msg, text)
+        return "task"
+    save_inbox(api, msg)                                          # пересланное, файлы, фото = данные
     react(api, me, msg["message_id"])
     return "inbox"
+
+
+# --- команды бота и задачи агенту ---
+
+HELP = """Пиши задачу обычным текстом: агент возьмёт её в работу, ход будет виден в одном сообщении.
+Пересланное и файлы уходят в inbox как данные; перешли, потом напиши, что с этим сделать.
+Следующее сообщение продолжает ту же сессию; /new начинает заново.
+
+/status — что сейчас идёт и что в очереди
+/stop — прервать текущий прогон
+/new — новая сессия агента
+/inbox — непрочитанное"""
+COMMANDS = [("status", "что идёт и что в очереди"), ("stop", "прервать прогон"), ("new", "новая сессия агента"),
+            ("inbox", "непрочитанное")]
+
+
+def load_agent():
+    f = CONF / "agent.json"
+    return json.loads(f.read_text()) if f.exists() else None
+
+
+def runner_pid():
+    f = DATA / "agent.pid"
+    try:
+        pid = int(f.read_text())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def enqueue_task(api, me, msg, text):
+    task = {"text": text, "message_id": msg["message_id"], "date": msg.get("date"), "created": time.time()}
+    write_atomic(d("tasks", f"{time.time():.3f}.json"), json.dumps(task, ensure_ascii=False))
+    react(api, me, msg["message_id"], "👀")
+    if runner_pid():
+        api.call("sendMessage", chat_id=me, text="В очереди, после текущего прогона.",
+                 reply_parameters={"message_id": msg["message_id"]})
+        return
+    log = open(d("agent.log"), "a")
+    subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("agent.py"))],
+                     stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+def command(api, me, msg, text):
+    name = text[1:].split()[0].split("@")[0]
+    say = lambda t: api.call("sendMessage", chat_id=me, text=t, link_preview_options={"is_disabled": True})
+    if name in ("start", "help"):
+        say(HELP if load_agent() else "Пересылай сообщения и файлы — уйдут в inbox. /inbox — что там.")
+    elif name == "inbox":
+        say(inbox_summary())
+    elif name == "new":
+        (DATA / "agent-session").unlink(missing_ok=True)
+        say("Новая сессия: следующая задача начнётся с чистого контекста.")
+    elif name == "stop":
+        pid = runner_pid()
+        if pid:
+            import signal
+            os.killpg(pid, signal.SIGTERM)                       # раннер и claude в одной группе процессов
+            say("Остановлено. Очередь задач сохранена: /status.")
+        else:
+            say("Сейчас ничего не идёт.")
+    elif name == "status":
+        tasks = sorted(d("tasks", "x").parent.glob("*.json"))
+        cur = DATA / "agent-current.json"
+        lines = []
+        if runner_pid() and cur.exists():
+            c = json.loads(cur.read_text())
+            lines.append(f"Идёт ({int((time.time() - c['started']) // 60)} мин): {c['text'][:120]}")
+        else:
+            lines.append("Сейчас ничего не идёт.")
+        if tasks:
+            lines.append(f"\nВ очереди: {len(tasks)}")
+            lines += [f"- {json.loads(t.read_text())['text'][:80]}" for t in tasks[:10]]
+        lines.append("\nСессия: " + ("продолжается" if (DATA / "agent-session").exists() else "новая"))
+        say("\n".join(lines))
+    elif name in load_actions() and not any("{arg}" in x for x in load_actions()[name]):
+        code, out = run_action(name, "")                          # /queue и т.п. — action без аргумента
+        say((out or "пусто")[-3500:] if code == 0 else f"{name}: ошибка, код {code}\n{out[-800:]}")
+    else:
+        say(f"Нет команды /{name}. /help")
+    return f"cmd:{name}"
 
 
 def inbox_summary(limit=15):
@@ -396,6 +482,12 @@ def cmd_daemon(a):
     api, lock = Api(), PollLock()
     lock.acquire(block=True)
     print(f"tg-bridge daemon: chat={chat_id() or 'не привязан, жду /start'}", flush=True)
+    try:                                                          # меню команд в клиенте Telegram
+        extra = [(k, "action") for k, v in load_actions().items() if not any("{arg}" in x for x in v)]
+        cmds = (COMMANDS if load_agent() else [("inbox", "непрочитанное")]) + extra
+        api.call("setMyCommands", commands=[{"command": c, "description": t} for c, t in cmds])
+    except Exception as e:
+        print(f"WARN: setMyCommands: {e}", file=sys.stderr, flush=True)
     delay = 1
     while True:
         try:
@@ -510,6 +602,11 @@ def cmd_whoami(a):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "progress":           # tg progress … → progress.py (живой статус)
+        import runpy
+        sys.argv = [str(Path(__file__).with_name("progress.py"))] + sys.argv[2:]
+        runpy.run_path(sys.argv[0], run_name="__main__")
+        return
     ap = argparse.ArgumentParser(prog="tg", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
     sp.add_parser("daemon").set_defaults(f=cmd_daemon)
@@ -521,6 +618,7 @@ def main():
     s.add_argument("--photo"); s.add_argument("--doc")
     s.add_argument("--button", action="append", default=[])
     s.add_argument("--cols", type=int, default=0, help="кнопок в ряду (по умолчанию: 4 коротких или 1 длинная)")
+    s.add_argument("--reply-to", help="ответом на это сообщение")
     s.set_defaults(f=cmd_send)
     e = sp.add_parser("edit")
     e.add_argument("message_id", type=int); e.add_argument("text", nargs="?")

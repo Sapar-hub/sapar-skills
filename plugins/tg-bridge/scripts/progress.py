@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Живой статус прогона worker'а в Telegram: одно сообщение, которое редактируется на месте.
+"""Живой статус прогона агента в Telegram: одно сообщение, которое редактируется на месте.
 
-  claude -p … --output-format stream-json --verbose | progress.py --title "<компания — роль>" --log <file>
+  claude -p … --output-format stream-json --verbose | tg progress --title "<что делаем>" --log <file>
+      [--freeform] [--session-file F] [--reply-to MESSAGE_ID]
+
+--freeform      итог без строки STATUS: (задачи из чата): успех = прогон без ошибки
+--session-file  сюда пишется session_id (для --resume следующей задачи)
+--reply-to      статус — ответом на сообщение пользователя с задачей
 
 - stdin: события stream-json; каждое пишется в --log как есть.
 - В начале одно сообщение (одно уведомление), дальше только правки (без уведомлений), не чаще раза в EDIT_EVERY с.
@@ -16,8 +21,11 @@ WORDS = {"done": "готово", "skipped": "пропущено", "paused": "п�
          "bl-done": "добавлено в blacklist"}
 
 
+TG = [sys.executable, "-I", str(Path(__file__).with_name("tg.py"))]
+
+
 def tg(*args):
-    p = subprocess.run(["tg", *args], capture_output=True, text=True)
+    p = subprocess.run([*TG, *args], capture_output=True, text=True)
     return p.stdout.strip() if p.returncode == 0 else None
 
 
@@ -61,11 +69,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--title", required=True)
     ap.add_argument("--log", required=True)
+    ap.add_argument("--freeform", action="store_true")
+    ap.add_argument("--session-file")
+    ap.add_argument("--reply-to")
     a = ap.parse_args()
     log = open(a.log, "w", encoding="utf-8")
     t0, steps, last_edit, result = time.time(), [], 0.0, None
     title = f"<b>{html.escape(a.title)}</b>"
-    mid = tg("send", "--html", f"{title}\nзапуск")
+    mid = tg("send", "--html", f"{title}\nзапуск", *(["--reply-to", a.reply_to] if a.reply_to else []))
 
     def render():
         lines = [f"{title}\nидёт, {mmss(time.time() - t0)}, шагов {len(steps)}", ""]
@@ -79,6 +90,8 @@ def main():
             ev = json.loads(raw)
         except json.JSONDecodeError:
             continue
+        if ev.get("session_id") and a.session_file:
+            Path(a.session_file).write_text(ev["session_id"])
         if ev.get("type") == "assistant":
             for b in (ev.get("message") or {}).get("content") or []:
                 if b.get("type") == "tool_use":
@@ -91,7 +104,7 @@ def main():
 
     text = (result or {}).get("result") or ""
     m = re.search(r"^STATUS: (\w[\w-]*)\s*(?:—\s*(.*))?$", text, re.M)
-    status = m.group(1) if m else "failed"
+    status = m.group(1) if m else ("done" if a.freeform and result else "failed")
     summary = plain(re.sub(r"^STATUS:.*$", "", text, flags=re.M)) or \
         ("агент не вернул итог" if result else "прогон оборвался, итога нет")
     if result and result.get("is_error"):
@@ -109,7 +122,7 @@ def main():
     if status == "failed":
         tg("send", "лог прогона", "--doc", a.log)
     log.close()
-    print(text if m else f"{text}\nSTATUS: failed — {summary[:200]}")
+    print(text if (m or a.freeform) else f"{text}\nSTATUS: failed — {summary[:200]}")
 
 
 if __name__ == "__main__":

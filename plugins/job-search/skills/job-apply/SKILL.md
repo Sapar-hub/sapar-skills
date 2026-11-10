@@ -124,7 +124,12 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
   Writing the row: find the last non-empty row in column A (`get_values Applications!A1:A300`) and use `update_values`
   on the row after it. Don't use `append_values` on `A1`: the sheet has empty rows between blocks, and append fills
   the first gap in the middle of the sheet.
-- **Tracker outbox.** Headless runs (auto mode) can't reach Google Sheets, so they leave rows in
+- **Tracker without connectors** (auto mode, tasks from Telegram): `scripts/sheet.py` talks to the
+  sheet through an Apps Script web app (`apps-script/tracker.gs`, set up once by the user; config `~/.config/job-apply/sheet.env`).
+  `sheet.py find <words>` returns rows with their numbers. `sheet.py update <row> --set E=… --add N="dd.mm …"` changes a row
+  (`--add` appends a line to the cell, which is how correspondence goes into N). `tracker.py add < row.json` writes a new row
+  through the web app, or into the outbox when it is not configured or unreachable. `sheet.py flush` moves the outbox into the sheet.
+- **Tracker outbox.** When the web app is missing, headless runs leave rows in
   `python3 -I scripts/tracker.py pending`. In an interactive session (the plugin's hook reports «в tracker-outbox N строк»),
   write each row as above and then run `tracker.py done <id>`. Check that a row for the same company + role + date is not
   already in the sheet before writing.

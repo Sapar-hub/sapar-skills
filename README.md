@@ -94,6 +94,8 @@ tg ask "Отправить отклик?" --photo shot.png --buttons "отпра
 tg send "готово" --doc resume.pdf
 tg inbox                                  # что ты переслал боту (JSON, помечено untrusted)
 ```
+**Задачи из чата.** Если есть `~/.config/tg-bridge/agent.json`, твой обычный текст боту становится задачей. Пересланное и файлы при этом остаются данными. Например: перешли ответ рекрутера и напиши «разбери и запиши в трекер». `scripts/agent.py` запускает `claude -p` со скиллами. Ход задачи виден в одном сообщении, которое в конце становится ответом. Следующее сообщение продолжает ту же сессию. Команды: `/status`, `/stop`, `/new`, `/inbox`. job_tracker без коннекторов пишется через Apps Script web app (`job-apply/apps-script/tracker.gs` + `scripts/sheet.py`).
+
 Один демон (`systemd --user` `tg-bridge`) держит `getUpdates`; кнопки `--button "label=action:arg"` запускают только команды из `tg action add` (argv без shell). Хук `UserPromptSubmit` сообщает агенту, что в inbox что-то есть, но содержимое в контекст сам не подкладывает.
 
 ## Безопасность

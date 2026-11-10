@@ -45,6 +45,15 @@ tg whoami
   name/phone are fine. Never send passwords, tokens, the profile.yaml or the master resume in full.
 - The token lives in `~/.config/tg-bridge/env` (chmod 600). Never print it; `tg whoami` checks it.
 
+## Tasks from the chat (remote mode)
+
+With `~/.config/tg-bridge/agent.json` present, the user's own text in the bot chat becomes a task. Forwards, files
+and photos stay as inbox data. `scripts/agent.py` runs one task at a time with `claude -p`. Its live status is one
+message replying to the task, and that message becomes the final answer. A lock is shared with the job-apply worker,
+because there is only one browser. The next message continues the same session (`--resume`). Bot commands: `/status`,
+`/stop`, `/new`, `/inbox`, plus any registered action without `{arg}`, which becomes `/<name>`. Rules for the run are in
+[references/remote.md](references/remote.md). The runner is a child of the daemon, so restarting `tg-bridge` aborts a running task.
+
 ## Setup and debug
 
 ```bash

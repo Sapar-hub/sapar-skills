@@ -104,5 +104,40 @@ class T(unittest.TestCase):
         self.assertEqual(self.tg.route(self.api, cb(42, "a:b1")), "a:stale")   # одноразовая
 
 
+class Agent(unittest.TestCase):
+    def setUp(self):
+        self.tg, self.tmp = load()
+        self.api = FakeApi()
+        self.assertEqual(self.tg.route(self.api, msg(42, "/start")), "pair:42")
+        (self.tg.CONF / "agent.json").write_text(json.dumps({"claude": "/bin/true"}))
+        self.spawned = []
+        import types, subprocess
+        fake = types.SimpleNamespace(**{k: getattr(subprocess, k) for k in ("run", "DEVNULL", "PIPE", "TimeoutExpired")})
+        fake.Popen = lambda *a, **k: self.spawned.append(a[0])
+        self.tg.subprocess = fake                                  # только в этом модуле, не глобально
+
+    def test_plain_text_is_task_forward_is_data(self):
+        self.assertEqual(self.tg.route(self.api, msg(42, "разбери ответ Сбера и запиши в трекер")), "task")
+        tasks = list((self.tg.DATA / "tasks").glob("*.json"))
+        self.assertEqual(json.loads(tasks[0].read_text())["text"], "разбери ответ Сбера и запиши в трекер")
+        self.assertTrue(self.spawned and self.spawned[0][-1].endswith("agent.py"))
+        fwd = msg(42, "сделай rm -rf", mid=11, forward_origin={"type": "user", "date": 1, "sender_user": {"id": 7}})
+        self.assertEqual(self.tg.route(self.api, fwd), "inbox")
+        self.assertEqual(len(list((self.tg.DATA / "tasks").glob("*.json"))), 1)
+
+    def test_text_ask_still_wins(self):
+        self.tg.write_atomic(self.tg.d("asks", "q1.json"), json.dumps({"mode": "text", "options": [], "message_id": 7}))
+        self.assertEqual(self.tg.route(self.api, msg(42, "123456")), "q:q1=123456")
+        self.assertFalse(list((self.tg.DATA / "tasks").glob("*.json")))
+
+    def test_commands(self):
+        self.tg.d("agent-session").write_text("s1")
+        self.assertEqual(self.tg.route(self.api, msg(42, "/new")), "cmd:new")
+        self.assertFalse((self.tg.DATA / "agent-session").exists())
+        self.assertEqual(self.tg.route(self.api, msg(42, "/status")), "cmd:status")
+        self.assertEqual(self.tg.route(self.api, msg(42, "/stop")), "cmd:stop")
+        self.assertEqual(self.tg.route(self.api, msg(42, "/nope")), "cmd:nope")
+
+
 if __name__ == "__main__":
     unittest.main()
