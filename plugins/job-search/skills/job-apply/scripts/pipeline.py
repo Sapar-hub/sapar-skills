@@ -72,14 +72,16 @@ def executor(prompt, log, timeout=600, tries=2):
     for attempt in range(1, tries + 1):
         work = tempfile.mkdtemp(prefix="ja-exec.")
         env = {**os.environ, "OPENCODE_CONFIG_DIR": str(EXEC_CONF)}
+        timed_out = False
         try:
             p = subprocess.run([OPENCODE, "run", "--standalone", "--format", "json", prompt], cwd=work, env=env,
                                capture_output=True, text=True, timeout=timeout)
             out = p.stdout
         except subprocess.TimeoutExpired as e:
+            timed_out = True
             out = (e.stdout or b"").decode(errors="ignore") if isinstance(e.stdout, bytes) else (e.stdout or "")
         Path(f"{log}.{attempt}.jsonl").write_text(out)
-        texts = []
+        texts, tools = [], 0
         for line in out.splitlines():
             try:
                 ev = json.loads(line)
@@ -87,6 +89,12 @@ def executor(prompt, log, timeout=600, tries=2):
                 continue
             if ev.get("type") == "text":
                 texts.append(ev.get("part", {}).get("text", ""))
+            tools += ev.get("type") == "tool_use"
+        if timed_out:
+            # завис на старте (бесплатная модель так умеет) — повтор; работал и не уложился — повтор не поможет
+            if tools >= 3:
+                return f"TIMEOUT: {mmss(timeout)}, {tools} команд"
+            continue
         if texts:
             return texts[-1]
     return ""
@@ -126,8 +134,11 @@ RECON = """Ты исполнитель. Разведка вакансии для
 2. {B} live <url> и precheck.
 3. Открой форму отклика (кнопка «Откликнуться» и т.п. на странице вакансии; cookie-баннеры закрывай).
    Внутри формы ничего не нажимай и не заполняй. Оставь форму открытой на экране.
+Бюджет: не больше 30 команд. Сайт не открывается (ERR_TUNNEL/timeout) — повтори один раз, потом иди дальше.
+Если у работодателя нет своей формы, но вакансия есть на hh.ru, — это RECON: hh, не ищи дальше.
 Последняя строка ответа ровно одна из:
 RECON: ok <url вакансии на сайте работодателя> | <компания> | <должность>
+RECON: hh <url вакансии на hh.ru> | <компания> | <должность>
 RECON: closed — <почему>
 RECON: blacklist — <что сказал precheck>
 RECON: dup — <что сказал precheck>
@@ -182,7 +193,12 @@ def run(key):
     if not r.startswith("ok"):
         st.step("разведка", r or "исполнитель не ответил")
         kind = r.split()[0] if r else ""
-        return ("skipped" if kind in ("closed", "blacklist", "not_found") else "paused"), f"разведка: {r or 'нет ответа'}"
+        # paused — только когда ждём человека у открытой формы; сбой разведки очередь не держит
+        status = {"closed": "skipped", "blacklist": "skipped", "dup": "skipped", "not_found": "skipped"}.get(kind, "failed")
+        if kind == "hh":
+            note = f"только hh.ru: {r[3:]} — отклик через hh.mjs (worker hh пока не делает)"
+            return "failed", note
+        return status, f"разведка: {r or last_line(out, 'TIMEOUT') or 'нет ответа'}"
     url = r.split()[1] if len(r.split()) > 1 else ""
     vac = sh(f"{B} text 20000").stdout
     live = sh(f"{B} live {url}").stdout if url else ""
