@@ -16,7 +16,7 @@
       "name": "job-search",
       "source": "./plugins/job-search",
       "description": "job-digest (Telegram/RSS via RSSHub → keyword filter → daily Mail.ru digest), job-apply (drive Chromium to apply on employer career sites with a tailored resume PDF) and job-contacts (find recruiters and team leads from public sources, map hiring, rate-limited outreach); optional Telegram gates, digest buttons and a headless auto-apply queue via tg-bridge.",
-      "version": "1.6.1"
+      "version": "1.7.0"
     },
     {
       "name": "tg-bridge",

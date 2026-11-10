@@ -49,3 +49,44 @@ export async function claimBrowser(home) {
     await new Promise((r) => setTimeout(r, 3000));
   }
 }
+
+// --- гейт отправки -------------------------------------------------------------------------------------------
+// В headless-прогоне (JOB_APPLY_RUN) нажать «Откликнуться/Отправить» можно только с одноразовым токеном, который
+// выдаёт gate.py после кнопки «отправить» в Telegram (или по no_confirm из auto.yaml). Модель обойти это не может:
+// без файла-токена browser.mjs откажет, сколько бы она ни просила.
+export const SUBMIT_RE = /(откликн|отправ|подать|подтверд.*отклик|завершить|submit|apply|send\b)/i;
+
+export function needToken() { return !!process.env.JOB_APPLY_RUN; }
+
+export function useToken(home, given) {
+  const run = process.env.JOB_APPLY_RUN;
+  const f = join(home, 'gate', `${run}.token`);
+  let want = '';
+  try { want = readFileSync(f, 'utf8').trim(); } catch {}
+  if (!want || !given || given !== want) return false;
+  try { unlinkSync(f); } catch {}                              // одноразовый
+  return true;
+}
+
+// элемент — отправка формы отклика: type=submit, или кнопка с текстом отправки ВНУТРИ контейнера формы отклика
+// (form или ближайший предок с полем файла/почты/телефона). «Откликнуться» на странице вакансии, которая только
+// открывает форму, и «Загрузить резюме» под это не попадают.
+export const IS_SUBMIT_JS = (el) => {
+  const t = ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').trim();
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  if (type === 'submit') return true;
+  const service = /загруз|прикреп|upload|attach|выбр|добав|удал|показ|скры|ещё|еще|add|remove|show|hide/i.test(t);
+  // <button> без type внутри <form> по стандарту HTML отправляет форму, какой бы ни был текст
+  if (el.tagName === 'BUTTON' && !type && el.closest('form') && !service) return true;
+  if (!/(откликн|отправ|подать|завершить|submit|apply|send)/i.test(t) || service) return false;
+  let box = el.closest('form');
+  for (let p = el.parentElement, i = 0; !box && p && i < 8; p = p.parentElement, i++)
+    if (p.querySelector('input[type=file], input[type=email], input[type=tel]')) box = p;
+  return !!box;
+};
+
+// Enter внутри формы отклика (есть файл/почта/телефон) = отправка
+export const ENTER_SUBMITS_JS = () => {
+  const f = document.activeElement && document.activeElement.closest && document.activeElement.closest('form');
+  return !!(f && f.querySelector('input[type=file], input[type=email], input[type=tel]'));
+};

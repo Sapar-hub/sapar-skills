@@ -20,7 +20,7 @@
 //   browser.mjs shot [file.png]     скриншот (по умолчанию $JOB_APPLY_HOME/shot.png)
 //   browser.mjs back | wait <ms>
 import { chromium } from 'playwright';
-import { claimBrowser } from './lock.mjs';
+import { claimBrowser, needToken, useToken, IS_SUBMIT_JS, ENTER_SUBMITS_JS, SUBMIT_RE } from './lock.mjs';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -88,6 +88,15 @@ async function connect() {
   // узкое окно = мобильная вёрстка с баннерами «скачайте приложение», перекрывающими формы
   await pages[i].setViewportSize({ width: 1366, height: 900 }).catch(() => {});
   return { browser, ctx, pages, page: pages[i] };
+}
+
+// отправка в headless-прогоне: только с токеном от gate.py (см. lock.mjs)
+function gate(rest) {
+  const i = rest.indexOf('--token');
+  if (!useToken(HOME, i >= 0 ? rest[i + 1] : '')) {
+    die('ОТПРАВКА ЗАБЛОКИРОВАНА: нужен токен от gate.py (подтверждение пользователя в Telegram). '
+      + 'Запусти python3 -I scripts/gate.py <папка отклика> и повтори с --token <токен>.');
+  }
 }
 
 // ref вида f2e14 -> фрейм №2; e14 -> главный фрейм
@@ -282,7 +291,9 @@ const cmds = {
     console.log(`OK: ${await sel.locator('.ant-select-selection-item').first().innerText().catch(() => '?')}`);
   },
   async pick(args, { page }) {
-    const text = args.join(' ');
+    const tok = args.indexOf('--token');
+    const text = (tok >= 0 ? args.slice(0, tok) : args).join(' ');
+    if (needToken() && SUBMIT_RE.test(text)) gate(args);
     const loc = page.getByText(text, { exact: true }).locator('visible=true');
     const n = await loc.count();
     if (!n) die(`не вижу «${text}» — проверь shot/text`);
@@ -290,7 +301,8 @@ const cmds = {
     await settle(page);
     console.log(`OK${n > 1 ? ` (совпадений ${n}, взял последнее)` : ''}`);
   },
-  async click([ref], { page }) {
+  async click([ref, ...rest], { page }) {
+    if (needToken() && !isX(ref) && await locate(page, ref).evaluate(IS_SUBMIT_JS).catch(() => false)) gate(rest);
     if (isX(ref)) await oopifAct(page, ref, 'click');
     else await locate(page, ref).click({ timeout: 10000 });
     await settle(page);
@@ -351,7 +363,10 @@ const cmds = {
     await settle(page);
     console.log('OK');
   },
-  async press([key], { page }) { await page.keyboard.press(key); await settle(page); console.log('OK'); },
+  async press([key, ...rest], { page }) {
+    if (needToken() && /^enter$/i.test(key) && await page.evaluate(ENTER_SUBMITS_JS).catch(() => false)) gate(rest);
+    await page.keyboard.press(key); await settle(page); console.log('OK');
+  },
   async back(_, { page }) { await page.goBack(); await settle(page); console.log(`OK: ${page.url()}`); },
   async wait([ms], { page }) { await page.waitForTimeout(Number(ms) || 1000); console.log('OK'); },
   async shot([file], { page }) {

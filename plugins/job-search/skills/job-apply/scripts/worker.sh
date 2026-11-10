@@ -58,15 +58,22 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
   export JOB_APPLY_RUN="apply-$key-$$"
   mkdir -p "$H/runs"; printf '%s\n%s\n' "$$" "отклик: $title" > "$H/runs/$JOB_APPLY_RUN"
   mkdir -p "$(dirname "$SESS")"
-  # stream-json → progress.py: одно сообщение в Telegram, которое обновляется по ходу и становится итогом
-  # через fish: config.fish экспортирует креды (KC_*, MAILRU_*, прокси), которых нет в окружении systemd --user
-  "${LOGIN_SHELL[@]}" "$CLAUDE" -p "Скилл job-apply, headless-режим. Сначала прочитай references/auto-apply.md и SKILL.md, \
-затем обработай элемент очереди $key (python3 -I scripts/queue.py show $key). \
-Пользователь только в Telegram (tg). Последняя строка ответа — STATUS: …" \
-    --output-format stream-json --verbose \
-    --permission-mode acceptEdits --allowedTools "${ALLOWED[@]}" \
-    --add-dir "$H" --add-dir "$CONF" 2>&1 </dev/null \
-    | "$TG" progress --title "$title" --log "$log" --session-file "$SESS" >"$out"
+  # конвейер: OpenCode делает руками, Claude только план/резюме/письмо, код проверяет и держит гейт отправки.
+  # Нет OpenCode/конфига исполнителя или JOB_APPLY_ENGINE=claude — старый путь: один claude -p на весь отклик.
+  if [ "${JOB_APPLY_ENGINE:-pipeline}" = pipeline ] && [ -f "$CONF/opencode-executor/opencode.jsonc" ] \
+     && { command -v opencode >/dev/null || [ -x "$HOME/.opencode/bin/opencode" ]; }; then
+    "${LOGIN_SHELL[@]}" python3 -I "$SCRIPTS/pipeline.py" "$key" >"$out" 2>"$log"
+  else
+    # stream-json → progress.py: одно сообщение в Telegram, которое обновляется по ходу и становится итогом
+    # через fish: config.fish экспортирует креды (KC_*, MAILRU_*, прокси), которых нет в окружении systemd --user
+    "${LOGIN_SHELL[@]}" "$CLAUDE" -p "Скилл job-apply, headless-режим. Сначала прочитай references/auto-apply.md и SKILL.md, \
+  затем обработай элемент очереди $key (python3 -I scripts/queue.py show $key). \
+  Пользователь только в Telegram (tg). Последняя строка ответа — STATUS: …" \
+      --output-format stream-json --verbose \
+      --permission-mode acceptEdits --allowedTools "${ALLOWED[@]}" \
+      --add-dir "$H" --add-dir "$CONF" 2>&1 </dev/null \
+      | "$TG" progress --title "$title" --log "$log" --session-file "$SESS" >"$out"
+  fi
   rm -f "$H/runs/$JOB_APPLY_RUN"
   [ "$(cat "$H/browser.owner" 2>/dev/null)" = "$JOB_APPLY_RUN" ] && rm -f "$H/browser.owner"
   line=$(grep -E '^STATUS: (done|skipped|paused|failed|bl-done)' "$out" | tail -1)
