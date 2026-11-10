@@ -5,7 +5,7 @@
   contacts.py add --company C --name N --role R --channel email|tg|phone|linkedin|other --value V --source URL
                   [--team T] [--note TXT]
   contacts.py map [company]                 # дерево компания → команда → люди
-  contacts.py due [--today YYYY-MM-DD] [--days N]   # кому пора написать / напомнить
+  contacts.py due [--today YYYY-MM-DD] [--days N]   # кому пора написать (отклик ≥N раб. дней, по умолч. 3) / напомнить
   contacts.py log <value> sent|followup|replied|bounced|skip [--note TXT]
 
 Данные: $JOB_APPLY_HOME (по умолчанию ~/.local/share/job-apply): contacts.tsv, outreach.tsv, applied.tsv.
@@ -209,6 +209,11 @@ def check_touch(value, followup, now=None):
     return None
 
 
+def workdays(start, end):
+    """Рабочие дни (пн–пт) после start до end включительно; праздники РФ не учитываются."""
+    return sum(1 for i in range(1, (end - start).days + 1) if (start + dt.timedelta(days=i)).weekday() < 5)
+
+
 def cmd_due(a):
     now, contacts = today(a.today), read_tsv(CONTACTS, C_FIELDS)
     by_company = {}
@@ -242,7 +247,7 @@ def cmd_due(a):
             d = dt.date.fromisoformat(row["date"])
         except ValueError:
             continue
-        if CLOSED.search(row["status"]) or (now - d).days < a.days:
+        if CLOSED.search(row["status"]) or workdays(d, now) < a.days:
             continue
         known = match(row["company"])
         if any(touches(r["value"]) for r in known):
@@ -254,7 +259,7 @@ def cmd_due(a):
             per.setdefault(r["name"], []).append(f"{r['channel']} {r['value']}")
         who = "; ".join(f"{n} — {', '.join(ch)}" for n, ch in list(per.items())[:2]) \
             or "контактов нет → найти (SKILL.md, шаг 2)"
-        print(f"написать   {row['company']} — «{row['title']}», отклик {d} ({(now - d).days} дн.): {who}")
+        print(f"написать   {row['company']} — «{row['title']}», отклик {d} ({workdays(d, now)} раб. дн.): {who}")
     if not any_:
         print("ничего не горит")
 
@@ -292,7 +297,8 @@ def main():
     ad.add_argument("--source"); ad.add_argument("--team"); ad.add_argument("--note")
     ad.set_defaults(f=cmd_add)
     m = sub.add_parser("map"); m.add_argument("company", nargs="?"); m.set_defaults(f=cmd_map)
-    d = sub.add_parser("due"); d.add_argument("--today"); d.add_argument("--days", type=int, default=10)
+    d = sub.add_parser("due"); d.add_argument("--today"); d.add_argument("--days", type=int, default=3,
+                                                                    help="рабочих дней после отклика")
     d.set_defaults(f=cmd_due)
     lg = sub.add_parser("log"); lg.add_argument("value")
     lg.add_argument("action", choices=["sent", "followup", "replied", "bounced", "skip"]); lg.add_argument("--note")
