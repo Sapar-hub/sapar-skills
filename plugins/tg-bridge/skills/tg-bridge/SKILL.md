@@ -18,12 +18,18 @@ tg inbox                                      # forwarded items as JSON lines, m
 tg inbox --peek | --count
 tg action add contacts-log -- /usr/bin/python3 -I /abs/contacts.py log {arg} sent
 tg send "Написал @hr?" --button "отправил=contacts-log:@hr"
+tg edit <message_id> "новый текст" [--html]  # rewrite own message in place: live status, no notification
 tg whoami
 ```
 
-- `ask` prints the answer and exits 0; on timeout it exits 2 and marks the message «⏱ таймаут».
+- `ask` prints the answer and exits 0; on timeout it exits 2 and appends «Без ответа (таймаут)» to the message.
   A reply in free text to a button question is also an answer: read it, don't assume a button.
 - Text >4096 chars goes as a .txt document; a caption >1024 chars goes as a separate message.
+- Style: plain, minimal text in messages and buttons, no emoji or decorative symbols. Acknowledgement of
+  the user's messages is a reaction (👌), not a text reply. A button press appends one line to its own message instead
+  of sending a new one.
+- Long-running work: one status message (`tg send` prints its id) updated with `tg edit` (≥3 s apart), which
+  becomes the final result. Not a message per step.
 - Rate limit: ~1 message/s to one chat. When sending many items, the scripts sleep between them.
 
 ## Rules

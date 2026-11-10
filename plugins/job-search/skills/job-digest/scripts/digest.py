@@ -306,12 +306,13 @@ def tg_bin():
 
 def tg_text(r, hs):
     e = html.escape
-    out = [f'<b>{e(r["feed"])}</b> · {r["pub"][:10]} · <a href="{e(r["link"])}">пост</a>']
+    out = [f'<b>{e(r["feed"])}</b>, {r["pub"][8:10]}.{r["pub"][5:7]} · <a href="{e(r["link"])}">пост</a>']
     for n, (text, href, det) in enumerate(hs[:8], 1):
+        text = re.sub(r"^[^\w«\"(]+", "", text)              # маркеры и эмодзи каналов в начале: «💙 - стажёр…» → «стажёр…»
         t = f'<a href="{e(href)}">{e(text)}</a>' if href else e(text)
         out.append(f"{n}. {t}" + (f"\n    <i>{e(det)}</i>" if det else ""))
     if len(hs) > 8:
-        out.append(f"…ещё {len(hs) - 8} в посте")
+        out.append(f"и ещё {len(hs) - 8} в посте")
     return "\n".join(out)
 
 
@@ -323,10 +324,10 @@ def push_tg(found):
     for r, hs in found:
         btns = []
         for n in range(1, min(len(hs), 8) + 1):
-            btns += ["--button", f"✅ {n}=digest-queue:{r['rowid']}.{n}"]
-        btns += ["--button", f"скип=digest-skip:{r['rowid']}"]
+            btns += ["--button", f"{n}=digest-queue:{r['rowid']}.{n}"]
+        btns += ["--button", f"Скип=digest-skip:{r['rowid']}"]
         if len(hs) == 1:
-            btns += ["--button", f"🚫=digest-bl:{r['rowid']}.1"]
+            btns += ["--button", f"В blacklist=digest-bl:{r['rowid']}.1"]
         p = subprocess.run([tg, "send", "--html", tg_text(r, hs), *btns], capture_output=True, text=True)
         if p.returncode:
             print(f"WARN: tg send: {p.stderr.strip()}", file=sys.stderr)
@@ -352,11 +353,12 @@ def queue_add(c, key, status):
     if not 1 <= n <= len(hs):
         die(f"в посте {rowid} нет вакансии {n}")
     text, href, det = hs[n - 1]
+    text = re.sub(r"^[^\w«\"(]+", "", text)
     f = APPLY_HOME / "queue.tsv"
     f.parent.mkdir(parents=True, exist_ok=True)
     rows = [l.split("\t") for l in f.read_text(encoding="utf-8").splitlines()[1:]] if f.exists() else []
     if any(x[1] == f"{rowid}.{n}" for x in rows):
-        print(f"уже в очереди: {text}")
+        print("уже в очереди")
         return False
     new = not f.exists()
     with f.open("a", encoding="utf-8") as out:
@@ -367,7 +369,7 @@ def queue_add(c, key, status):
                                          text, href, det, r["link"], ""])) + "\n")
     c.execute("update items set state=? where rowid=?", ("queued" if status == "new" else status, rowid))
     c.commit()
-    print(f"{status}: {text}")
+    print({"new": "в очереди на отклик", "bl-review": "на разбор в blacklist"}[status])
     return True
 
 
@@ -387,7 +389,7 @@ def cmd_skip(a):
     get_row(c, a.id)
     c.execute("update items set state='skipped' where rowid=?", (int(a.id),))
     c.commit()
-    print(f"skipped {a.id}")
+    print("пропущено")
 
 
 def cmd_item(a):

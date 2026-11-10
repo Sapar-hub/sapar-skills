@@ -2,7 +2,7 @@
 # Разбирает очередь откликов (queue.tsv) по одному: claude -p + job-apply, общение через Telegram (tg).
 #   worker.sh            всё, что new / bl-review; останавливается на первом paused (вкладка остаётся как есть)
 #   worker.sh <key>      один конкретный элемент (в т.ч. paused — продолжить)
-# Запускается кнопкой «✅ N» под постом дайджеста (digest.py queue → systemctl start job-apply-worker).
+# Запускается кнопкой «N» под постом дайджеста (digest.py queue → systemctl start job-apply-worker).
 set -uo pipefail
 
 SCRIPTS=$(cd "$(dirname "$0")" && pwd)
@@ -37,21 +37,24 @@ ALLOWED=(
 )
 
 run_one() {
-  local key=$1 log status line
-  log="$H/worker-logs/$(date +%Y%m%d-%H%M%S)-$key.log"
+  local key=$1 log out status line title
+  log="$H/worker-logs/$(date +%Y%m%d-%H%M%S)-$key.jsonl"
+  out="${log%.jsonl}.result.txt"
+  title=$($Q show "$key" | python3 -I -c 'import json,sys; r=json.load(sys.stdin); print((r["title"] or r["key"])[:80])')
   $Q set "$key" in-progress >/dev/null
   cd "$SKILL"
+  # stream-json → progress.py: одно сообщение в Telegram, которое обновляется по ходу и становится итогом
   "$CLAUDE" -p "Скилл job-apply, headless-режим. Сначала прочитай references/auto-apply.md и SKILL.md, \
 затем обработай элемент очереди $key (python3 -I scripts/queue.py show $key). \
 Пользователь только в Telegram (tg). Последняя строка ответа — STATUS: …" \
+    --output-format stream-json --verbose \
     --permission-mode acceptEdits --allowedTools "${ALLOWED[@]}" \
-    --add-dir "$H" --add-dir "$CONF" >"$log" 2>&1 </dev/null
-  line=$(grep -E '^STATUS: (done|skipped|paused|failed|bl-done)' "$log" | tail -1)
+    --add-dir "$H" --add-dir "$CONF" 2>&1 </dev/null \
+    | python3 -I "$SCRIPTS/progress.py" --title "$title" --log "$log" >"$out"
+  line=$(grep -E '^STATUS: (done|skipped|paused|failed|bl-done)' "$out" | tail -1)
   status=$(printf '%s' "$line" | awk '{print $2}')
   [ -n "$status" ] || { status=failed; line="STATUS: failed — агент не вернул статус"; }
   $Q set "$key" "$status" --note "${line#STATUS: $status}" >/dev/null
-  [ "$status" = failed ] && "$TG" send "job-apply worker: $key — $line
-лог: $log"
   echo "$key $status"
   [ "$status" != paused ]                         # paused: дальше не идём, вкладку не трогаем
 }

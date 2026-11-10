@@ -5,6 +5,7 @@
   tg send TEXT | --stdin [--html] [--photo F] [--doc F] [--button "label=action:arg"]... [--cols N]
   tg ask TEXT [--photo F] (--buttons "да,нет" | --text) [--timeout 900]
                                              ждёт ответа; stdout = ответ, exit 2 = таймаут
+  tg edit MESSAGE_ID TEXT | --stdin [--html]  переписать своё сообщение (живой статус, без уведомления)
   tg inbox [--peek] [--count]                пересланное боту, JSON-строки с "untrusted": true
   tg action add NAME -- argv... {arg}        кнопка "label=NAME:arg" запускает argv без shell
   tg action list | tg action rm NAME
@@ -200,6 +201,21 @@ def run_action(name, arg):
         return 126, str(e)
 
 
+def append_line(api, m, line, markup=None):
+    """Дописать строку в уже отправленное сообщение (текст или подпись), сохранив разметку через entities."""
+    try:
+        if "caption" in m or "photo" in m or "document" in m:
+            api.call("editMessageCaption", chat_id=m["chat"]["id"], message_id=m["message_id"],
+                     caption=((m.get("caption") or "") + "\n\n" + line)[:MAX_CAPTION],
+                     caption_entities=m.get("caption_entities") or [], reply_markup=markup)
+        else:
+            api.call("editMessageText", chat_id=m["chat"]["id"], message_id=m["message_id"],
+                     text=((m.get("text") or "") + "\n\n" + line)[:MAX_TEXT], entities=m.get("entities") or [],
+                     reply_markup=markup, link_preview_options={"is_disabled": True})
+    except Exception:
+        pass
+
+
 def save_inbox(api, msg):
     item = {"untrusted": True, "date": msg.get("date"), "message_id": msg["message_id"],
             "text": msg.get("text") or msg.get("caption") or ""}
@@ -223,7 +239,7 @@ def save_inbox(api, msg):
         cands.append((msg["document"], f"{msg['message_id']}-{Path(msg['document'].get('file_name') or 'file').name}"))
     for f, name in cands:
         if (f.get("file_size") or 0) > MAX_FILE:
-            files.append({"skipped": name, "reason": ">20MB, Bot API не отдаёт"})
+            files.append({"skipped": name, "reason": "больше 20 МБ, Bot API не отдаёт"})
             continue
         try:
             files.append(str(api.download(f["file_id"], d("inbox", "files", name))))
@@ -252,7 +268,7 @@ def route(api, upd):
                 return "q:stale"
             value = ask["options"][int(idx)]
             answer(qid, value)
-            api.call("answerCallbackQuery", callback_query_id=cq["id"], text=f"→ {value}")
+            api.call("answerCallbackQuery", callback_query_id=cq["id"], text=value)
             return f"q:{qid}={value}"
         if kind == "a":
             f = DATA / "btn" / f"{rest}.json"
@@ -261,20 +277,19 @@ def route(api, upd):
                 return "a:stale"
             btn = json.loads(f.read_text())
             code, out = run_action(btn["action"], btn["arg"])
-            api.call("answerCallbackQuery", callback_query_id=cq["id"], text=("✅ " if code == 0 else "❌ ") + btn["label"])
+            m = cq["message"]
+            api.call("answerCallbackQuery", callback_query_id=cq["id"],
+                     text=f"{btn['label']}: {'ок' if code == 0 else 'ошибка'}")
             if code == 0:
                 f.unlink(missing_ok=True)                      # кнопка одноразовая
-                try:                                           # убрать сработавшую кнопку из сообщения
-                    m = cq["message"]
-                    rows = [[b for b in r if b.get("callback_data") != cq["data"]]
-                            for r in (m.get("reply_markup") or {}).get("inline_keyboard", [])]
-                    api.call("editMessageReplyMarkup", chat_id=me, message_id=m["message_id"],
-                             reply_markup={"inline_keyboard": [r for r in rows if r]})
-                except Exception:
-                    pass
-            api.call("sendMessage", chat_id=me, reply_to_message_id=cq["message"]["message_id"],
-                     text=f"{'✅' if code == 0 else '❌ exit ' + str(code)} {btn['action']} {btn['arg']}"
-                          + (f"\n{out[-800:]}" if out else ""))
+                # итог — строкой в том же сообщении, без нового: чат не растёт от каждого нажатия
+                rows = [[b for b in r if b.get("callback_data") != cq["data"]]
+                        for r in (m.get("reply_markup") or {}).get("inline_keyboard", [])]
+                note = (out.strip().splitlines() or [""])[-1][:200]
+                append_line(api, m, f"{btn['label']}: {note or 'ок'}", {"inline_keyboard": [r for r in rows if r]})
+            else:
+                api.call("sendMessage", chat_id=me, reply_to_message_id=m["message_id"],
+                         text=f"{btn['action']} {btn['arg']}: ошибка, код {code}" + (f"\n{out[-800:]}" if out else ""))
             return f"a:{btn['action']}:{code}"
         return "drop:unknown-callback"
 
@@ -301,6 +316,7 @@ def route(api, upd):
         target = next(iter(text_asks))
     if target and text:                                        # реплай на вопрос с кнопками — тоже ответ (свободный)
         answer(target, text)
+        react(api, me, msg["message_id"])
         return f"q:{target}={text}"
     if text in ("/start", "/help"):
         api.call("sendMessage", chat_id=me, text="Уже привязано. Пересылай сообщения и файлы — уйдут в inbox; "
@@ -311,12 +327,17 @@ def route(api, upd):
         api.call("sendMessage", chat_id=me, text=f"в inbox: {n}")
         return "cmd:inbox"
     save_inbox(api, msg)
+    react(api, me, msg["message_id"])
+    return "inbox"
+
+
+def react(api, chat, message_id, emoji="👌"):
+    """Реакция на сообщение пользователя: «принято», без лишнего текста в чате."""
     try:
-        api.call("setMessageReaction", chat_id=me, message_id=msg["message_id"],
-                 reaction=[{"type": "emoji", "emoji": "👌"}])
+        api.call("setMessageReaction", chat_id=chat, message_id=message_id,
+                 reaction=[{"type": "emoji", "emoji": emoji}])
     except Exception:
         pass
-    return "inbox"
 
 
 class PollLock:
@@ -364,6 +385,17 @@ def cmd_daemon(a):
             delay = min(delay * 2, 60)
 
 
+def cmd_edit(a):
+    """Переписать своё сообщение целиком (живой статус). Ошибку «message is not modified» глотаем."""
+    text = sys.stdin.read() if a.stdin else (a.text or "")
+    try:
+        Api().call("editMessageText", chat_id=chat_id(), message_id=a.message_id, text=text[:MAX_TEXT] or "—",
+                   parse_mode="HTML" if a.html else None, link_preview_options={"is_disabled": True})
+    except RuntimeError as e:
+        if "not modified" not in str(e):
+            die(str(e))
+
+
 # --- ask ---
 
 def cmd_ask(a):
@@ -401,7 +433,7 @@ def cmd_ask(a):
     finally:
         (DATA / "asks" / f"{qid}.json").unlink(missing_ok=True)
         ans.unlink(missing_ok=True)
-    mark = f"\n\n→ {value}" if value is not None else "\n\n⏱ таймаут, без ответа"
+    mark = f"\n\nОтвет: {value}" if value is not None else "\n\nБез ответа (таймаут)"
     try:
         if kind == "caption":
             api.call("editMessageCaption", chat_id=chat_id(), message_id=mid, caption=(text + mark)[:MAX_CAPTION])
@@ -468,6 +500,10 @@ def main():
     s.add_argument("--button", action="append", default=[])
     s.add_argument("--cols", type=int, default=0, help="кнопок в ряду (по умолчанию: 4 коротких или 1 длинная)")
     s.set_defaults(f=cmd_send)
+    e = sp.add_parser("edit")
+    e.add_argument("message_id", type=int); e.add_argument("text", nargs="?")
+    e.add_argument("--stdin", action="store_true"); e.add_argument("--html", action="store_true")
+    e.set_defaults(f=cmd_edit)
     q = sp.add_parser("ask")
     q.add_argument("question")
     q.add_argument("--buttons")

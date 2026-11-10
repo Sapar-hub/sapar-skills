@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Очередь откликов из Telegram-дайджеста (кнопка «✅ N» → digest.py queue).
+"""Очередь откликов из Telegram-дайджеста (кнопка «N» → digest.py queue).
 
   queue.py list [--all]            что ждёт (new, bl-review, paused) или всё
   queue.py next                    ключ первого `new`/`bl-review` (пусто — очередь пуста)
