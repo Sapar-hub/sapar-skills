@@ -1,7 +1,7 @@
 {
   "name": "job-search",
-  "version": "1.1.0",
-  "description": "Job search for AI agents: daily vacancy digest from Telegram/RSS into Mail.ru, and applying on employers' own career sites with a tailored resume.",
+  "version": "1.2.0",
+  "description": "Job search for AI agents: daily vacancy digest from Telegram/RSS into Mail.ru, applying on employers' own career sites with a tailored resume, and reaching recruiters and team leads directly from public sources.",
   "author": {
     "name": "Sapar",
     "url": "https://github.com/Sapar-hub"
@@ -9,5 +9,17 @@
   "homepage": "https://github.com/Sapar-hub/sapar-skills",
   "repository": "https://github.com/Sapar-hub/sapar-skills",
   "license": "MIT",
-  "keywords": ["jobs", "internships", "rsshub", "telegram", "mail.ru", "playwright", "resume", "russian"]
+  "keywords": [
+    "jobs",
+    "internships",
+    "rsshub",
+    "telegram",
+    "mail.ru",
+    "playwright",
+    "resume",
+    "russian",
+    "osint",
+    "sourcing",
+    "outreach"
+  ]
 }

@@ -33,6 +33,18 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
 - **Employer's site only.** From a digest link (Changellenge, a Telegram post) go
   to the company's career site: search the vacancy title there (e.g.
   career.ozon.ru, sberbank.ru/careers, career.avito.com) and apply there.
+- **hh.ru: read-only source.** The browser profile is logged in to the user's hh account (applicant).
+  Use it for facts, never for applying, chatting or editing the hh resume:
+  - find the same vacancy on hh (`https://hh.ru/search/vacancy?text=<title> <company>`) and read with
+    `text`: salary range, required experience, schedule/format, publication date, archived or not;
+  - «You applied» / «Вы откликнулись» on the page = the user already responded via hh earlier: treat as DUP
+    and tell the user;
+  - the employer page (`hh.ru/employer/<id>`) lists the company's other open vacancies and teams: use it to
+    find sibling roles and to map teams for `job-contacts`;
+  - a «Контактная информация» block (shown only to logged-in applicants) is a published work contact:
+    save it with `job-contacts` `contacts.py add … --source <hh vacancy URL>`.
+  Do not press «Откликнуться», «Apply with another resume» or «Chat» on hh. If the session is gone (login form
+  instead of the «Resume and profile» menu), ask the user to log in again in the open window (`goto https://hh.ru/account/login`).
 - **Preflight, before writing a resume.** Two checks, both advisory; show the result to the user in a line or two:
   ```bash
   $B live <vacancy-url>       # LIVE | CLOSED | UNSURE + evidence (HTTP, «вакансия закрыта», redirect, apply button)
@@ -80,3 +92,6 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
   questionnaire answer, source, correspondence). Later emails from the employer go into N, and they
   update E/F. If the sheet has rows that are missing from `applied.tsv`/`history.tsv`
   (added by hand), append them to `history.tsv` (same columns) so `precheck` sees them.
+- If the form was opaque (no confirmation, no resume upload, a general programme registration, or a
+  bot instead of screening), offer the `job-contacts` skill for that company: find the recruiter or
+  team lead from public sources and write to them directly.
