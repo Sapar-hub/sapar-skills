@@ -13,7 +13,7 @@
   }
 Очередь: ~/.local/share/tg-bridge/tasks/*.json. Сессия: agent-session (её продолжает следующая задача, /new сбрасывает).
 """
-import atexit, fcntl, json, os, signal, subprocess, sys, time
+import atexit, fcntl, json, os, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -85,6 +85,9 @@ def run(cfg, task):
         log = DATA / "agent-logs" / f"{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
         log.parent.mkdir(parents=True, exist_ok=True)
         title = task.get("title") or " ".join(task["text"].split())[:60]
+        # через fish: config.fish экспортирует креды (KC_*, MAILRU_*, прокси), которых нет в окружении systemd --user
+        if cfg.get("login_shell", "fish") == "fish" and shutil.which("fish"):
+            cmd = [shutil.which("fish"), "-c", "exec $argv", *cmd]
         claude = subprocess.Popen(cmd, cwd=cfg.get("cwd", str(Path.home())), env=load_env(cfg.get("env_file")),
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         prog = subprocess.run([*TG, "progress", "--title", title, "--log", str(log), "--freeform",

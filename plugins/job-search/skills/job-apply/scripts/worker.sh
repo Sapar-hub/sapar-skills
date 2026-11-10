@@ -15,6 +15,8 @@ if [ -f "$CONF/worker.env" ]; then set -a; . "$CONF/worker.env"; set +a; fi
 TG=$(command -v tg) || { echo "ERR: нет tg (плагин tg-bridge)"; exit 1; }
 CLAUDE=${JOB_APPLY_AGENT:-$(command -v claude)} || { echo "ERR: нет claude"; exit 1; }
 Q="python3 -I $SCRIPTS/queue.py"
+LOGIN_SHELL=()
+command -v fish >/dev/null && LOGIN_SHELL=("$(command -v fish)" -c 'exec $argv')
 
 mkdir -p "$H/worker-logs"
 exec 9>"$H/worker.lock"
@@ -44,7 +46,8 @@ run_one() {
   $Q set "$key" in-progress >/dev/null
   cd "$SKILL"
   # stream-json → progress.py: одно сообщение в Telegram, которое обновляется по ходу и становится итогом
-  "$CLAUDE" -p "Скилл job-apply, headless-режим. Сначала прочитай references/auto-apply.md и SKILL.md, \
+  # через fish: config.fish экспортирует креды (KC_*, MAILRU_*, прокси), которых нет в окружении systemd --user
+  "${LOGIN_SHELL[@]}" "$CLAUDE" -p "Скилл job-apply, headless-режим. Сначала прочитай references/auto-apply.md и SKILL.md, \
 затем обработай элемент очереди $key (python3 -I scripts/queue.py show $key). \
 Пользователь только в Telegram (tg). Последняя строка ответа — STATUS: …" \
     --output-format stream-json --verbose \
