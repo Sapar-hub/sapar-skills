@@ -27,8 +27,15 @@ def snap():
     return p.stdout
 
 
+ATTACHED = re.compile(r"(открепить|удалить|заменить)\s+(файл|резюме)|remove file|replace file", re.I)
+
+
 def parse(text):
-    return [m.groupdict() for m in map(LINE.match, text.splitlines()) if m]
+    items = [m.groupdict() for m in map(LINE.match, text.splitlines()) if m]
+    for i, it in enumerate(items):                      # галочка без подписи: подпись — соседняя ссылка/текст
+        if it["kind"] in ("checkbox", "radio") and not it["label"].strip() and i + 1 < len(items):
+            it["label"] = items[i + 1]["label"]
+    return items
 
 
 def norm(s):
@@ -54,6 +61,8 @@ def check(plan, items):
         elif "upload" in f:
             name = Path(f["upload"]).name
             hit = [i for i in items if i["kind"] == "file" and name in (i["value"] or "")]
+            # после загрузки многие формы прячут input и показывают «Открепить файл»/имя файла
+            hit += [i for i in items if not hit and (name in i["label"] or ATTACHED.search(i["label"]))]
             if not hit:
                 problems.append(f"файл не загружен: {name} ({label})")
             used.update(i["ref"] for i in hit)
