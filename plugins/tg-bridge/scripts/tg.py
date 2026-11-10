@@ -323,12 +323,34 @@ def route(api, upd):
                  "/inbox — сколько там.")
         return "cmd:help"
     if text == "/inbox":
-        n = len(list(d("inbox", "x").parent.glob("*.json")))
-        api.call("sendMessage", chat_id=me, text=f"в inbox: {n}")
+        api.call("sendMessage", chat_id=me, text=inbox_summary(), link_preview_options={"is_disabled": True})
         return "cmd:inbox"
     save_inbox(api, msg)
     react(api, me, msg["message_id"])
     return "inbox"
+
+
+def inbox_summary(limit=15):
+    """Для /inbox в боте: что лежит непрочитанным (агент ещё не забрал), по строке на элемент."""
+    files = sorted(d("inbox", "x").parent.glob("*.json"))
+    if not files:
+        return "Inbox пуст."
+    lines = [f"Inbox, непрочитано: {len(files)}", ""]
+    for n, f in enumerate(files[-limit:], 1):
+        try:
+            it = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        fo = it.get("forward_origin") or {}
+        who = " ".join(filter(None, [fo.get("name"), f"@{fo['username']}" if fo.get("username") else None])) or "от тебя"
+        when = time.strftime("%d.%m %H:%M", time.localtime(it.get("date") or 0))
+        body = " ".join((it.get("text") or "").split())[:80] or "(без текста)"
+        extra = f", файлов: {len(it['files'])}" if it.get("files") else ""
+        lines.append(f"{n}. {who}, {when}{extra}\n   {body}")
+    if len(files) > limit:
+        lines.append(f"\nи ещё {len(files) - limit} раньше")
+    lines.append("\nЗабрать в работу: в сессии агента «что я скинул боту».")
+    return "\n".join(lines)
 
 
 def react(api, chat, message_id, emoji="👌"):
