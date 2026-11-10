@@ -1,6 +1,6 @@
 ---
 name: job-apply
-description: Use this skill when the user wants to apply to a vacancy or internship — «подайся», «откликнись на …», «заполни анкету Ozon/Сбер/…», or picks a vacancy from the job digest. It drives a real Chromium (persistent profile, user's logins) through `scripts/browser.mjs`: the agent reads the page as text, fills the company's own application form from the user's profile and attaches the right resume. Apply only on the employer's own career site, never through aggregators or middlemen.
+description: Use this skill when the user wants to apply to a vacancy or internship — «подайся», «откликнись на …», «заполни анкету Ozon/Сбер/…», or picks a vacancy from the job digest. It drives a real Chromium (persistent profile, user's logins) through `scripts/browser.mjs`: the agent reads the page as text, fills the company's own application form from the user's profile and attaches the right resume. Apply on the employer's own career site, and additionally on hh.ru when the vacancy is there too (`scripts/hh.mjs sync` first rewrites the track's hh resume from the tailored file); never through other aggregators or middlemen.
 ---
 
 # job-apply
@@ -30,21 +30,33 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
 
 ## Rules
 
-- **Employer's site only.** From a digest link (Changellenge, a Telegram post) go
+- **Employer's site first.** From a digest link (Changellenge, a Telegram post) go
   to the company's career site: search the vacancy title there (e.g.
-  career.ozon.ru, sberbank.ru/careers, career.avito.com) and apply there.
-- **hh.ru: read-only source.** The browser profile is logged in to the user's hh account (applicant).
-  Use it for facts, never for applying, chatting or editing the hh resume:
-  - find the same vacancy on hh (`https://hh.ru/search/vacancy?text=<title> <company>`) and read with
-    `text`: salary range, required experience, schedule/format, publication date, archived or not;
-  - «You applied» / «Вы откликнулись» on the page = the user already responded via hh earlier: treat as DUP
-    and tell the user;
-  - the employer page (`hh.ru/employer/<id>`) lists the company's other open vacancies and teams: use it to
-    find sibling roles and to map teams for `job-contacts`;
-  - a «Контактная информация» block (shown only to logged-in applicants) is a published work contact:
-    save it with `job-contacts` `contacts.py add … --source <hh vacancy URL>`.
-  Do not press «Откликнуться», «Apply with another resume» or «Chat» on hh. If the session is gone (login form
-  instead of the «Resume and profile» menu), ask the user to log in again in the open window (`goto https://hh.ru/account/login`).
+  career.ozon.ru, sberbank.ru/careers, career.avito.com) and apply there. Aggregators and middlemen
+  (Changellenge forms, youngjunior «Автоотклики», hirify) are never used to apply.
+- **hh.ru: facts, and a second channel.** The browser profile is logged in to the user's hh account (applicant).
+  - Facts: find the same vacancy on hh (`https://hh.ru/search/vacancy?text=<title> <company>`) and read with
+    `text`: salary range, required experience, schedule/format, publication date, archived or not.
+    «You applied» / «Вы откликнулись» = already applied via hh: DUP, tell the user.
+    The employer page (`hh.ru/employer/<id>`) lists sibling vacancies and teams; a «Контактная информация»
+    block is a published work contact → `job-contacts` `contacts.py add … --source <hh vacancy URL>`.
+  - Second channel: when the same vacancy is also on hh, apply there too after the employer-site
+    application (or only on hh if the employer has no own form). Steps:
+    1. `node scripts/hh.mjs sync <TRACK> <tailored.yaml>` — overwrite the track's hh resume from this
+       application's tailored file («Обо мне», key skills ≤30, salary empty; backup in `hh-backup/`).
+       Tracks ↔ resume ids: `~/.config/job-apply/hh-resumes.json` (`hh.mjs map`); TRACK is the resume
+       file suffix (DS, LLM, MLE, DA, PA, ЦОД…). Use `--dry` to preview.
+    2. `goto` the hh vacancy → `click` «Откликнуться» → in the dialog pick the synced resume by its title,
+       add the cover letter (the same text as on the employer site, ≤ hh limit), answer employer questions
+       from the profile, `shot`, then submit under the same submit gate as any form.
+    3. `applied.tsv` gets its own line with `hh` in the status (e.g. `отправлено (hh)`), and the tracker
+       row gets «+ hh.ru <date>» in H and the hh link in N.
+  - Shared hh profile parts (experience, education, contacts, languages) are not synced: keep them
+    consistent with master.yaml by hand; experience entries can be attached per resume (checkboxes in
+    the workplace editor).
+  - Never: hh chats with employers on the user's behalf, «Apply with another resume» to re-apply, raising
+    a resume with paid services. If the session is gone (login form instead of the «Resume and profile»
+    menu), ask the user to log in again in the open window (`goto https://hh.ru/account/login`).
 - **Preflight, before writing a resume.** Two checks, both advisory; show the result to the user in a line or two:
   ```bash
   $B live <vacancy-url>       # LIVE | CLOSED | UNSURE + evidence (HTTP, «вакансия закрыта», redirect, apply button)

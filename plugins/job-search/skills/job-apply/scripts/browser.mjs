@@ -31,6 +31,8 @@ const CDP = `http://127.0.0.1:${PORT}`;
 const TAB_FILE = join(HOME, 'tab');
 
 const die = (m) => { console.error(`ERR: ${m}`); process.exit(1); };
+// `browser.mjs snap | head`: читатель закрыл трубу — это не ошибка
+process.stdout.on('error', (e) => { if (e.code === 'EPIPE') process.exit(0); throw e; });
 
 // Выполняется в каждом фрейме: размечает элементы data-jref и возвращает их описание.
 const SNAP_JS = (prefix) => {
