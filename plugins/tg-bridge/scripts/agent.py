@@ -38,6 +38,32 @@ def load_env(path):
     return env
 
 
+FORWARD_TASK = ("Пользователь переслал в inbox новые сообщения ({n}) без комментария. Прочитай их (`tg inbox`). "
+                "Если в этой сессии ты ждал пересланное (например, вопросы, на которые обещал набросать ответы), "
+                "сделай обещанное. Если контекста нет, коротко скажи, что это и что с этим можно сделать.")
+
+
+def next_task(tdir):
+    """Следующая задача. Пересылка ждёт FORWARD_WAIT; если за это время пришёл текст — берём текст, а пересылка
+    растворяется в нём (агент всё равно читает inbox). -> (path, task) или None."""
+    while True:
+        files = sorted(tdir.glob("*.json"))
+        if not files:
+            return None
+        fwd = tdir / "forward.json"
+        texts = [f for f in files if f.name != "forward.json"]
+        if texts:
+            if fwd.exists():
+                fwd.unlink()
+            return texts[0], json.loads(texts[0].read_text())
+        task = json.loads(fwd.read_text())
+        wait = task.get("not_before", 0) - time.time()
+        if wait <= 0:
+            return fwd, {**task, "text": FORWARD_TASK.format(n=task.get("count", 1)),
+                         "title": f"пересланное: {task.get('count', 1)}"}
+        time.sleep(min(wait, 2) + 0.1)
+
+
 def prompt(text):
     return (f"Задача от пользователя из Telegram (он с телефона, терминала нет):\n\n{text}\n\n"
             f"Сначала прочитай правила удалённого режима: {RULES}. "
@@ -58,7 +84,7 @@ def run(cfg, task):
             cmd += ["--resume", sid]
         log = DATA / "agent-logs" / f"{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
         log.parent.mkdir(parents=True, exist_ok=True)
-        title = " ".join(task["text"].split())[:60]
+        title = task.get("title") or " ".join(task["text"].split())[:60]
         claude = subprocess.Popen(cmd, cwd=cfg.get("cwd", str(Path.home())), env=load_env(cfg.get("env_file")),
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         prog = subprocess.run([*TG, "progress", "--title", title, "--log", str(log), "--freeform",
@@ -81,11 +107,11 @@ def main():
 
     lock = open(cfg["lock"], "a") if cfg.get("lock") else None
     while True:
-        tasks = sorted((DATA / "tasks").glob("*.json"))
-        if not tasks:
+        got = next_task(DATA / "tasks")
+        if not got:
             return
-        task = json.loads(tasks[0].read_text())
-        tasks[0].unlink()                                          # взяли: /stop не перезапустит её
+        path, task = got
+        path.unlink(missing_ok=True)                               # взяли: /stop не перезапустит её
         if lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

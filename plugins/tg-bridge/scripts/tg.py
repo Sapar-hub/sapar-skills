@@ -331,6 +331,9 @@ def route(api, upd):
         return "task"
     save_inbox(api, msg)                                          # пересланное, файлы, фото = данные
     react(api, me, msg["message_id"])
+    if agent:                                                     # …но и повод продолжить: агент сам заберёт inbox
+        enqueue_forward(msg)
+        return "inbox+task"
     return "inbox"
 
 
@@ -363,17 +366,36 @@ def runner_pid():
         return None
 
 
+FORWARD_WAIT = 15            # с: переслал несколько сообщений и дописал текст — это одна задача
+
+
+def start_runner():
+    if runner_pid():
+        return False
+    log = open(d("agent.log"), "a")
+    subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("agent.py"))],
+                     stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+    return True
+
+
+def enqueue_forward(msg):
+    """Пересылка без текста — задача «продолжи», с задержкой: текст следом её заменит (agent.py склеивает)."""
+    f = d("tasks", "forward.json")                                # одна на пачку пересылок; каждая сдвигает срок
+    task = json.loads(f.read_text()) if f.exists() else {"kind": "forward", "message_id": msg["message_id"],
+                                                          "created": time.time(), "count": 0}
+    task.update(not_before=time.time() + FORWARD_WAIT, count=task["count"] + 1, last_message_id=msg["message_id"])
+    write_atomic(f, json.dumps(task, ensure_ascii=False))
+    start_runner()
+
+
 def enqueue_task(api, me, msg, text):
     task = {"text": text, "message_id": msg["message_id"], "date": msg.get("date"), "created": time.time()}
     write_atomic(d("tasks", f"{time.time():.3f}.json"), json.dumps(task, ensure_ascii=False))
     react(api, me, msg["message_id"], "👀")
-    if runner_pid():
+    cur = DATA / "agent-current.json"
+    if not start_runner() and cur.exists():
         api.call("sendMessage", chat_id=me, text="В очереди, после текущего прогона.",
                  reply_parameters={"message_id": msg["message_id"]})
-        return
-    log = open(d("agent.log"), "a")
-    subprocess.Popen([sys.executable, "-I", str(Path(__file__).with_name("agent.py"))],
-                     stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
 
 
 def command(api, me, msg, text):
@@ -405,7 +427,7 @@ def command(api, me, msg, text):
             lines.append("Сейчас ничего не идёт.")
         if tasks:
             lines.append(f"\nВ очереди: {len(tasks)}")
-            lines += [f"- {json.loads(t.read_text())['text'][:80]}" for t in tasks[:10]]
+            lines += [f"- {json.loads(t.read_text()).get('text') or 'пересланное'}"[:82] for t in tasks[:10]]
         lines.append("\nСессия: " + ("продолжается" if (DATA / "agent-session").exists() else "новая"))
         say("\n".join(lines))
     elif name in load_actions() and not any("{arg}" in x for x in load_actions()[name]):

@@ -48,7 +48,9 @@ tg whoami
 ## Tasks from the chat (remote mode)
 
 With `~/.config/tg-bridge/agent.json` present, the user's own text in the bot chat becomes a task. Forwards, files
-and photos stay as inbox data. `scripts/agent.py` runs one task at a time with `claude -p`. Its live status is one
+and photos stay as inbox data, but they also queue a «continue» task 15 s later. A text written within
+those 15 s replaces it, so «forward several messages, then say what to do» runs as one task, while a bare forward continues
+the session (for example, the next screening question the agent asked to see). `scripts/agent.py` runs one task at a time with `claude -p`. Its live status is one
 message replying to the task, and that message becomes the final answer. A lock is shared with the job-apply worker,
 because there is only one browser. The next message continues the same session (`--resume`). Bot commands: `/status`,
 `/stop`, `/new`, `/inbox`, plus any registered action without `{arg}`, which becomes `/<name>`. Rules for the run are in
