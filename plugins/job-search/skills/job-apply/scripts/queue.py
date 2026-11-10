@@ -15,7 +15,7 @@ from pathlib import Path
 F = Path(os.environ.get("JOB_APPLY_HOME", "~/.local/share/job-apply")).expanduser() / "queue.tsv"
 FIELDS = ["date", "key", "status", "feed", "title", "href", "details", "post", "note"]
 STATUSES = ["new", "in-progress", "done", "skipped", "paused", "failed", "bl-review", "bl-done"]
-OPEN = ("new", "bl-review", "paused")
+OPEN = ("new", "bl-review", "paused", "failed")
 
 
 def load():

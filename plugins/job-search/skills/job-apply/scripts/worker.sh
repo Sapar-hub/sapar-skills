@@ -72,6 +72,13 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
   line=$(grep -E '^STATUS: (done|skipped|paused|failed|bl-done)' "$out" | tail -1)
   status=$(printf '%s' "$line" | awk '{print $2}')
   [ -n "$status" ] || { status=failed; line="STATUS: failed — агент не вернул статус"; }
+  # лимит/доступ к API — не вина вакансии: вернуть в очередь и остановиться, а не прогнать впустую всю очередь
+  if grep -q -E "hit your .*limit|usage limit|rate limit|HTTP 403|Request blocked" "$log" "$out" 2>/dev/null; then
+    $Q set "$key" new --note "отложено: $(grep -o -m1 -E "hit your [^\"]*|usage limit[^\"]*|HTTP 403" "$log" "$out" | head -1 | cut -d: -f2-)" >/dev/null
+    "$TG" send "Очередь откликов остановлена: лимит или доступ к API. Вакансия возвращена в очередь, продолжу при следующем запуске." >/dev/null 2>&1
+    echo "$key limit"
+    return 1
+  fi
   $Q set "$key" "$status" --note "${line#STATUS: $status}" >/dev/null
   echo "$key $status"
   [ "$status" != paused ]                         # paused: дальше не идём, вкладку не трогаем
