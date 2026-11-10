@@ -7,6 +7,7 @@
 //     headline, about, ats_keywords, ats_hidden — как есть
 //     projects / experience: [id | {id, bullets: [индексы], add_metrics: false}] — порядок = порядок в резюме
 //     skills: [группы мастера по порядку]; publications: [id]; courses: [порядок профильных курсов]
+//     order: [about, skills, projects, ...] и titles: {projects: '...'} — порядок/заголовки секций (опционально)
 //
 // Мастер с фактами: $JOB_APPLY_RESUME (по умолчанию ~/.config/job-apply/resume/master.yaml).
 // Tailored-файл — самодостаточный, той же схемы, что пример в SKILL.md:
@@ -26,6 +27,13 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const SKILL_LABELS = {
   languages_prog: 'Языки', ml_dl: 'ML / DL', cv: 'Computer Vision', nlp_llm: 'NLP / LLM', data: 'Данные',
   stats: 'Статистика', sql: 'SQL', infra: 'Инфраструктура', ai_agents: 'AI-агенты',
+};
+
+// Порядок и заголовки секций; tailored-файл может переопределить через order: [...] и titles: {секция: заголовок}
+const ORDER = ['about', 'projects', 'experience', 'skills', 'education', 'publications', 'conferences', 'languages'];
+const TITLES = {
+  about: 'О себе', projects: 'Проекты', experience: 'Опыт', skills: 'Навыки', education: 'Образование',
+  publications: 'Публикации', conferences: 'Конференции', languages: 'Языки',
 };
 
 function entry(it, kind) {
@@ -78,14 +86,16 @@ function html(r) {
   <h1>${esc(r.name.first)} ${esc(r.name.last)}</h1>
   ${r.headline ? `<div class="headline">${esc(r.headline)}</div>` : ''}
   <div class="contacts">${contacts}</div>
-  ${sec('О себе', r.about && `<p class="about">${esc(r.about)}</p>`)}
-  ${sec('Проекты', (r.projects || []).map((p) => entry(p, 'proj')).join(''))}
-  ${sec('Опыт', (r.experience || []).map((p) => entry(p, 'exp')).join(''))}
-  ${sec('Навыки', skills && `<table>${skills}</table>`)}
-  ${sec('Образование', edu)}
-  ${sec('Публикации', list(r.publications))}
-  ${sec('Конференции', list(r.conferences))}
-  ${sec('Языки', r.languages?.length && `<div>${r.languages.map(esc).join(' · ')}</div>`)}
+  ${(r.order || ORDER).map((k) => sec(r.titles?.[k] || TITLES[k] || die(`неизвестная секция ${k}`), {
+    about: r.about && `<p class="about">${esc(r.about)}</p>`,
+    projects: (r.projects || []).map((p) => entry(p, 'proj')).join(''),
+    experience: (r.experience || []).map((p) => entry(p, 'exp')).join(''),
+    skills: skills && `<table>${skills}</table>`,
+    education: edu,
+    publications: list(r.publications),
+    conferences: list(r.conferences),
+    languages: r.languages?.length && `<div>${r.languages.map(esc).join(' · ')}</div>`,
+  }[k])).join('\n')}
   ${ats}
   </body></html>`;
 }
@@ -96,7 +106,7 @@ function check(r, m) {
   const norm = (s) => String(s).toLowerCase().replace(/\.(?!\d)/g, ' ').replace(/[^\p{L}\p{N}.%+]+/gu, ' ').trim();
   const masterText = norm(JSON.stringify(m));
   const masterWords = new Set(masterText.split(' '));
-  const skip = new Set(['headline', 'about', 'ats_hidden', 'ats_keywords']);
+  const skip = new Set(['headline', 'about', 'ats_hidden', 'ats_keywords', 'order', 'titles']);
   const out = [];
   const walk = (v, path) => {
     if (typeof v === 'string') {
@@ -130,6 +140,7 @@ function tailor(spec, m) {
     contacts: { city: m.contacts.city, phone: m.contacts.phone, email: m.contacts.email,
       telegram: m.contacts.telegram, github: m.contacts.github },
     headline: spec.headline, about: spec.about,
+    ...(spec.order && { order: spec.order }), ...(spec.titles && { titles: spec.titles }),
     projects: pick(m.projects, spec.projects, 'projects'),
     experience: pick(m.experience, spec.experience, 'experience'),
     skills: Object.fromEntries((spec.skills || Object.keys(m.skills)).map((k) => [k, m.skills[k] ?? die(`нет группы навыков ${k}`)])),
