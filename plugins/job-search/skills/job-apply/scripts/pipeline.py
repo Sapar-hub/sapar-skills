@@ -258,18 +258,30 @@ def run(key):
     if not btn:
         return "paused", "не нашёл кнопку отправки"
     c = sh(f"{B} click {btn[-1]} --token {token}", env={**os.environ})
-    time.sleep(4)
-    after = sh(f"{B} text 4000").stdout
+    after, ok = "", False
+    for _ in range(6):                                           # тост «спасибо» бывает на пару секунд — ловим чаще
+        time.sleep(1.5)
+        after = sh(f"{B} text 4000").stdout
+        if SUCCESS.search(after):
+            ok = True
+            break
     sh(f"{B} shot {appdir}/after-submit.png")
-    if c.returncode or not SUCCESS.search(after):
+    snap2 = sh(f"{B} snap").stdout
+    (logs / "6-submit.txt").write_text(f"click rc={c.returncode}\n{c.stdout}{c.stderr}\n--- text\n{after}\n--- snap\n{snap2}",
+                                       encoding="utf-8")
+    plan = json.loads((appdir / "fill-plan.json").read_text())
+    # форма сама очистилась (значений плана больше нет) и ошибок не видно — почти наверняка ушло
+    vals = [str(f.get("value")) for f in plan.get("fields", []) if f.get("value")]
+    reset = not c.returncode and vals and not any(v in snap2 for v in vals) and \
+        not re.search(r"ошибк|обязательн|некоррект|error|required|invalid", after, re.I)
+    if c.returncode or not (ok or reset):
         subprocess.run(["tg", "send", "Не уверен, что отклик ушёл: на странице нет подтверждения. Проверь сам.",
                         "--photo", str(appdir / "after-submit.png")], capture_output=True)
         st.step("отправка", "не подтверждено")
         return "paused", "отправка не подтверждена сайтом — проверить вручную, НЕ отправлять повторно"
-    st.step("отправка", "сайт подтвердил")
+    st.step("отправка", "сайт подтвердил" if ok else "форма очистилась, явного «спасибо» нет")
 
     # 7. учёт
-    plan = json.loads((appdir / "fill-plan.json").read_text())
     with open(HOME / "applied.tsv", "a", encoding="utf-8") as fh:
         fh.write("\t".join([today, plan["company"], plan["title"], plan["url"],
                             str(Path(plan.get("resume_pdf", "")).relative_to(HOME / "applications"))
