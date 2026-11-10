@@ -29,5 +29,8 @@ replaces that message, so it is the only thing the user reads.
   an explicit button answer in this run.
 - Google Sheets connectors are not available here. For job_tracker, use the job-apply `scripts/sheet.py`
   (Apps Script web app) when it is configured, and fall back to `scripts/tracker.py add` (outbox) otherwise.
+- Other tasks may run in parallel. The browser is shared, so the first `browser.mjs`/`hh.mjs` call may print
+  «браузер занят: …, жду» and block. That is expected. Exit code 3 after 30 min means it was still busy, so say so instead of retrying.
+  Use the browser only when the task needs it (search and mail don't).
 - Things that need the laptop (SSO logins, captcha without relay, a dead browser): say so in the final answer.
 - Never print or send secrets: tokens, passwords, the profile.yaml or master.yaml in full.

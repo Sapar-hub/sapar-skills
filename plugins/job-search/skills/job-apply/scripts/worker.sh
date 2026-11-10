@@ -53,6 +53,10 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
   [ -n "$TG_THREAD" ] || TG_THREAD=$("$TG" topic "$title" --kind "apply:$key" --cwd "$SKILL" 2>/dev/null || true)
   export TG_THREAD
   SESS="$HOME/.local/share/tg-bridge/sessions/${TG_THREAD:-apply-$key}"
+  # прогон для лока браузера (lock.mjs): браузер занимает первый вызов browser.mjs, отпускаем после вакансии,
+  # чтобы задачи из чата с браузером могли вклиниться между откликами
+  export JOB_APPLY_RUN="apply-$key-$$"
+  mkdir -p "$H/runs"; printf '%s\n%s\n' "$$" "отклик: $title" > "$H/runs/$JOB_APPLY_RUN"
   mkdir -p "$(dirname "$SESS")"
   # stream-json → progress.py: одно сообщение в Telegram, которое обновляется по ходу и становится итогом
   # через fish: config.fish экспортирует креды (KC_*, MAILRU_*, прокси), которых нет в окружении systemd --user
@@ -63,6 +67,8 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
     --permission-mode acceptEdits --allowedTools "${ALLOWED[@]}" \
     --add-dir "$H" --add-dir "$CONF" 2>&1 </dev/null \
     | "$TG" progress --title "$title" --log "$log" --session-file "$SESS" >"$out"
+  rm -f "$H/runs/$JOB_APPLY_RUN"
+  [ "$(cat "$H/browser.owner" 2>/dev/null)" = "$JOB_APPLY_RUN" ] && rm -f "$H/browser.owner"
   line=$(grep -E '^STATUS: (done|skipped|paused|failed|bl-done)' "$out" | tail -1)
   status=$(printf '%s' "$line" | awk '{print $2}')
   [ -n "$status" ] || { status=failed; line="STATUS: failed — агент не вернул статус"; }

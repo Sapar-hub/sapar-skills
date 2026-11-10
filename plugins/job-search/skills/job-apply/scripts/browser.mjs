@@ -20,6 +20,7 @@
 //   browser.mjs shot [file.png]     скриншот (по умолчанию $JOB_APPLY_HOME/shot.png)
 //   browser.mjs back | wait <ms>
 import { chromium } from 'playwright';
+import { claimBrowser } from './lock.mjs';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -76,6 +77,7 @@ const SNAP_JS = (prefix) => {
 };
 
 async function connect() {
+  await claimBrowser(HOME);                         // headless-прогоны: браузер один, ждём своей очереди (lock.mjs)
   let browser;
   try { browser = await chromium.connectOverCDP(CDP); } catch { die('браузер не запущен: browser.mjs start'); }
   const ctx = browser.contexts()[0];

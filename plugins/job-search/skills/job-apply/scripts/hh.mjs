@@ -10,6 +10,7 @@
 // уровень дохода (всегда пусто). Название/профессия, опыт, образование, контакты — общие в профиле hh,
 // их ведём руками и сверяем с master.yaml. Отклик на hh — агентом через browser.mjs (см. SKILL.md).
 import { chromium } from 'playwright';
+import { claimBrowser } from './lock.mjs';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +38,7 @@ function resolveTrack(map, track) {
 }
 
 async function connect() {
+  await claimBrowser(HOME);                         // headless-прогоны: браузер один, ждём своей очереди (lock.mjs)
   let browser;
   try { browser = await chromium.connectOverCDP(CDP); } catch { die('браузер не запущен: browser.mjs start'); }
   const ctx = browser.contexts()[0];

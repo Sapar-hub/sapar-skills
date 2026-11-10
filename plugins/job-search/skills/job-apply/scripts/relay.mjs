@@ -5,6 +5,7 @@
 //
 //   relay.mjs [port]     печатает локальный адрес с токеном; Ctrl+C — остановить
 import { chromium } from 'playwright';
+import { claimBrowser } from './lock.mjs';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -16,6 +17,7 @@ const CDP = `http://127.0.0.1:${Number(process.env.JOB_APPLY_PORT || 9333)}`;
 const PORT = Number(process.argv[2] || 9444);
 const TOKEN = process.env.RELAY_TOKEN || randomBytes(16).toString('hex');
 
+await claimBrowser(HOME);
 const browser = await chromium.connectOverCDP(CDP);
 const page = () => {
   const pages = browser.contexts()[0].pages();

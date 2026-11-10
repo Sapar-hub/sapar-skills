@@ -416,6 +416,16 @@ def runner_pid():
 FORWARD_WAIT = 15            # с: переслал несколько сообщений и дописал текст — это одна задача
 
 
+def running():
+    out = []
+    for f in d("running", "x").parent.glob("*.json"):
+        try:
+            out.append(json.loads(f.read_text()))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return out
+
+
 def start_runner():
     if runner_pid():
         return False
@@ -440,9 +450,12 @@ def enqueue_task(api, me, msg, text, thread=None):
             "created": time.time()}
     write_atomic(d("tasks", f"{time.time():.6f}-{msg['message_id']}.json"), json.dumps(task, ensure_ascii=False))
     react(api, me, msg["message_id"], "👀")
-    cur = DATA / "agent-current.json"
-    if not start_runner() and cur.exists():
-        api.call("sendMessage", chat_id=me, text="В очереди, после текущего прогона.", message_thread_id=thread,
+    run = running()
+    limit = int((load_agent() or {}).get("parallel", 3))
+    busy = thread is not None and any(r.get("thread") == thread for r in run)
+    if not start_runner() and (busy or len(run) >= limit):
+        why = "в этой вкладке ещё идёт прошлое" if busy else f"уже идут {len(run)} задачи"
+        api.call("sendMessage", chat_id=me, text=f"В очереди: {why}.", message_thread_id=thread,
                  reply_parameters={"message_id": msg["message_id"]})
 
 
@@ -457,24 +470,25 @@ def command(api, me, msg, text):
     elif name == "new":
         say("Новая задача — просто напиши её в общем чате: бот откроет для неё новую вкладку.")
     elif name == "stop":
-        pid = runner_pid()
-        if pid:
-            import signal
-            os.killpg(pid, signal.SIGTERM)                       # раннер и claude в одной группе процессов
-            say("Остановлено. Очередь задач сохранена: /status.")
-        else:
-            say("Сейчас ничего не идёт.")
+        import signal
+        here = msg_thread(msg)
+        victims = [r for r in running() if here is None or r.get("thread") == here]   # во вкладке — только её задачу
+        for r in victims:
+            try:
+                os.killpg(r["pgid"], signal.SIGTERM)
+            except (OSError, KeyError):
+                pass
+        say(f"Остановлено: {len(victims)}. Очередь сохранена: /status." if victims else "Здесь ничего не идёт.")
     elif name == "status":
         tasks = sorted(d("tasks", "x").parent.glob("*.json"))
-        cur = DATA / "agent-current.json"
-        lines = []
-        if runner_pid() and cur.exists():
-            c = json.loads(cur.read_text())
+        run = running() if runner_pid() else []
+        lines = [f"Идёт: {len(run)}" if run else "Сейчас ничего не идёт."]
+        for c in run:
             tab = threads().get(str(c.get("thread")), {}).get("name")
-            lines.append(f"Идёт ({int((time.time() - c['started']) // 60)} мин){', вкладка «' + tab + '»' if tab else ''}: "
-                         f"{(c.get('title') or c.get('text') or '')[:120]}")
-        else:
-            lines.append("Сейчас ничего не идёт.")
+            lines.append(f"- {int((time.time() - c['started']) // 60)} мин, «{tab or c.get('title', '')}»")
+        owner = Path.home() / ".local/share/job-apply/browser.owner"
+        if owner.exists():
+            lines.append(f"Браузер занят: {owner.read_text().strip()}")
         if tasks:
             lines.append(f"\nВ очереди: {len(tasks)}")
             lines += [f"- {json.loads(t.read_text()).get('text') or 'пересланное'}"[:82] for t in tasks[:10]]

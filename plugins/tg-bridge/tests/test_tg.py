@@ -128,10 +128,10 @@ class Agent(unittest.TestCase):
         self.assertNotIn("rm -rf", json.dumps(tasks["forward-general.json"]))
         spec = importlib.util.spec_from_file_location("agent", HERE.parent / "scripts" / "agent.py")
         agent = importlib.util.module_from_spec(spec); spec.loader.exec_module(agent)
-        path, t = agent.next_task(self.tg.DATA / "tasks")                     # текст есть → берём его, пересылка растворяется
+        path, t = agent.pick(self.tg.DATA / "tasks", set())                  # текст есть → берём его, пересылка растворяется
         self.assertEqual(t["text"], "разбери ответ Сбера и запиши в трекер")
         path.unlink()
-        self.assertIsNone(agent.next_task(self.tg.DATA / "tasks"))
+        self.assertIsNone(agent.pick(self.tg.DATA / "tasks", set()))
 
     def test_text_ask_still_wins(self):
         self.tg.write_atomic(self.tg.d("asks", "q1.json"), json.dumps({"mode": "text", "options": [], "message_id": 7}))
@@ -178,6 +178,34 @@ class Topics(Agent):
             self.assertEqual(buf.getvalue().strip(), "1")
         finally:
             os.environ.pop("TG_THREAD", None)
+
+
+class Parallel(Agent):
+    def agent(self):
+        spec = importlib.util.spec_from_file_location("agent", HERE.parent / "scripts" / "agent.py")
+        a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
+        return a
+
+    def test_busy_tab_skipped_other_tabs_run(self):
+        self.tg.route(self.api, msg(42, "во вкладке 77", mid=20, message_thread_id=77, is_topic_message=True))
+        self.tg.route(self.api, msg(42, "ещё во вкладке 77", mid=21, message_thread_id=77, is_topic_message=True))
+        self.tg.route(self.api, msg(42, "во вкладке 88", mid=22, message_thread_id=88, is_topic_message=True))
+        a, tdir = self.agent(), self.tg.DATA / "tasks"
+        path, t = a.pick(tdir, {"77"})                     # 77 занята → берётся 88, не вторая из 77
+        self.assertEqual(t["thread"], 88)
+        path.unlink()
+        self.assertIsNone(a.pick(tdir, {"77", "88"}))
+        path, t = a.pick(tdir, set())
+        self.assertEqual(t["text"], "во вкладке 77")      # порядок внутри вкладки сохраняется
+
+    def test_new_tasks_from_general_run_in_parallel(self):
+        self.tg.route(self.api, msg(42, "задача 1", mid=30))
+        self.tg.route(self.api, msg(42, "задача 2", mid=31))
+        a, tdir = self.agent(), self.tg.DATA / "tasks"
+        p1, t1 = a.pick(tdir, set())
+        busy = {a.tab_key(t1, p1)}
+        p2, t2 = a.pick(tdir, busy)                         # у каждой задачи из общего чата — своя будущая вкладка
+        self.assertNotEqual(p1, p2)
 
 
 if __name__ == "__main__":

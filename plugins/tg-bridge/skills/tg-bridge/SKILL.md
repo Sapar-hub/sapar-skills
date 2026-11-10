@@ -57,7 +57,10 @@ The bot has Threaded Mode on, and **one tab (topic) is one task with its own ses
 - `TG_THREAD` in the environment routes `send`/`ask`/`edit`/`progress` into the tab, and makes `inbox` return that tab's items only
   (`--all` returns every tab). A deleted tab falls back to the general chat.
 
-One task runs at a time, under a lock shared with the job-apply worker. Commands: `/status`, `/stop`, `/inbox`, plus any
+Up to `parallel` tasks (default 3) run at once, one per tab, and a tab's tasks keep their order. The browser is the only
+shared resource. The first `browser.mjs`/`hh.mjs`/`relay.mjs` call of a run takes it (`JOB_APPLY_RUN` + job-apply
+`scripts/lock.mjs`), others wait up to 30 min, and it is released when the run ends. Tasks without the browser never wait.
+`/stop` inside a tab stops that tab's task, and in the general chat it stops all of them. `/status` shows who holds the browser. Commands: `/status`, `/stop`, `/inbox`, plus any
 registered action without `{arg}` as `/<name>`. Rules for a run: [references/remote.md](references/remote.md). The runner is a child of
 the daemon, so restarting `tg-bridge` aborts a running task.
 

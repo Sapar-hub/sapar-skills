@@ -24,6 +24,10 @@ $B shot                  # screenshot -> ~/.local/share/job-apply/shot.png; Read
 $B click e20             # submit — ONLY after the user confirmed
 ```
 
+Headless runs share this one browser. With `JOB_APPLY_RUN` set (the tg-bridge runner and the worker set it), the first
+`browser.mjs`/`hh.mjs`/`relay.mjs` call takes the browser for the whole run, and other runs wait (`scripts/lock.mjs`).
+Manual use at the laptop doesn't lock.
+
 Refs are renumbered on every `snap`. Run `snap` again after anything that re-renders the form.
 `click` errors print what covers the element (cookie banner, "download the app"
 popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
