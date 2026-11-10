@@ -36,6 +36,16 @@ Persistent=false
 [Install]
 WantedBy=timers.target
 EOF
+# прокси из текущего окружения → worker.env (systemd --user не видит переменные шелла)
+ENVF=$HOME/.config/job-apply/worker.env
+if [ ! -e "$ENVF" ]; then
+  : > "$ENVF"; chmod 600 "$ENVF"
+  for v in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy NO_PROXY no_proxy; do
+    [ -n "${!v:-}" ] && printf '%s=%s\n' "$v" "${!v}" >> "$ENVF"
+  done
+  grep -q -i '^no_proxy=' "$ENVF" || printf 'NO_PROXY=localhost,127.0.0.1,::1\nno_proxy=localhost,127.0.0.1,::1\n' >> "$ENVF"
+  echo "OK: $ENVF ($(grep -c . "$ENVF") переменных)"
+fi
 [ -e "$HOME/.config/job-apply/auto.yaml" ] || printf '# Сайты, где финальный submit без вопроса в Telegram (скрин и PDF всё равно придут).\n# Пример: no_confirm: [job.mts.ru]\nno_confirm: []\n' > "$HOME/.config/job-apply/auto.yaml"
 systemctl --user daemon-reload
 systemctl --user enable --now job-apply-worker.timer >/dev/null

@@ -10,6 +10,8 @@ SKILL=$(dirname "$SCRIPTS")
 H=${JOB_APPLY_HOME:-$HOME/.local/share/job-apply}
 CONF=${JOB_APPLY_CONFIG:-$HOME/.config/job-apply}
 export PATH="$HOME/.local/bin:$PATH"
+# прокси и прочее окружение интерактивного шелла (под systemd его нет: claude из РФ без прокси = 403)
+if [ -f "$CONF/worker.env" ]; then set -a; . "$CONF/worker.env"; set +a; fi
 TG=$(command -v tg) || { echo "ERR: нет tg (плагин tg-bridge)"; exit 1; }
 CLAUDE=${JOB_APPLY_AGENT:-$(command -v claude)} || { echo "ERR: нет claude"; exit 1; }
 Q="python3 -I $SCRIPTS/queue.py"
