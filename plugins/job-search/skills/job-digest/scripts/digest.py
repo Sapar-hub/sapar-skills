@@ -326,6 +326,8 @@ def push_tg(found):
         btns = []
         for n in range(1, min(len(hs), 8) + 1):
             btns += ["--button", f"{n}=digest-queue:{r['rowid']}.{n}"]
+        if len(hs) > 1:
+            btns += ["--button", f"Все ({min(len(hs), 8)})=digest-queue:{r['rowid']}.all"]
         btns += ["--button", f"Скип=digest-skip:{r['rowid']}"]
         if len(hs) == 1:
             btns += ["--button", f"В blacklist=digest-bl:{r['rowid']}.1"]
@@ -333,6 +335,11 @@ def push_tg(found):
         if p.returncode:
             print(f"WARN: tg send: {p.stderr.strip()}", file=sys.stderr)
         time.sleep(1.1)                                        # ~1 сообщение/с в один чат
+    total = sum(min(len(hs), 8) for _, hs in found)
+    if len(found) > 1:                                         # одна кнопка на весь дайджест
+        ids = ",".join(f"{r['rowid']}.all" for r, _ in found)
+        subprocess.run([tg, "send", f"Дайджест: постов {len(found)}, вакансий {total}.",
+                        "--button", f"Все в очередь ({total})=digest-queue:{ids}"], capture_output=True)
 
 
 def get_row(c, rowid):
@@ -375,7 +382,20 @@ def queue_add(c, key, status):
 
 
 def cmd_queue(a):
-    if queue_add(db(), a.key, "new") and shutil.which("systemctl"):
+    """key: <id>.<n> | <id>.all | несколько через запятую. Worker запускается один раз на всю пачку."""
+    c, added = db(), 0
+    for k in a.key.split(","):
+        rowid, _, n = k.strip().partition(".")
+        if n == "all":
+            r = get_row(c, rowid)
+            hs = post_hits(r, load_patterns()) or [(r["title"], r["link"], "")]
+            keys = [f"{rowid}.{i}" for i in range(1, min(len(hs), 8) + 1)]
+        else:
+            keys = [k.strip()]
+        added += sum(bool(queue_add(c, x, "new")) for x in keys)
+    if len(a.key.split(",")) > 1 or a.key.endswith(".all"):
+        print(f"в очереди: {added}")
+    if added and shutil.which("systemctl"):
         # worker job-apply (если поставлен) разбирает очередь; --no-block: кнопка не ждёт отклика
         subprocess.run(["systemctl", "--user", "start", "--no-block", "job-apply-worker.service"],
                        capture_output=True)
