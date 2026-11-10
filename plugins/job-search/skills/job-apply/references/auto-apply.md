@@ -58,7 +58,9 @@ site (SKILL.md, «Employer's site only»). If you can't find it there, it's `ski
      14 columns as SKILL.md describes. It goes straight into the sheet through the Apps Script web app, or into the outbox
      when the web app is not set up. L must hold every questionnaire field with its value, exactly
      as filled. The next interactive session moves it into the sheet.
-6. **Report.** Your final answer is the report. The worker puts it into the status message in Telegram, so don't
+   - **Contacts.** Follow SKILL.md «Contacts right after the submit»: find and save contacts, run `contacts.py searched`
+     and set the F date. Search only, never send.
+6. **Report.** Your final answer is the report. Include one line on contacts: «контакты: 2 (HR, лид)» or «публичных нет». The worker puts it into the status message in Telegram, so don't
    `tg send` it again. Keep it to 3–6 plain lines: what was done, the link, the resume file, risks, and what's next.
 
 ## bl-review items

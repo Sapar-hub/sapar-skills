@@ -133,6 +133,15 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
   `python3 -I scripts/tracker.py pending`. In an interactive session (the plugin's hook reports «в tracker-outbox N строк»),
   write each row as above and then run `tracker.py done <id>`. Check that a row for the same company + role + date is not
   already in the sheet before writing.
+- **Contacts right after the submit** (manual and auto mode alike). The day «написать» comes (`contacts.py due`,
+  3 working days later), there must already be someone to write to. While the vacancy page is still open:
+  1. Run `job-contacts` steps 1–4 (`extract` on the vacancy and hh text, 4–6 searches, `contacts.py add` with a source URL, `map`).
+     Spend at most ~5 minutes and 6 queries. Never send anything at this step.
+  2. Always run `contacts.py searched --company '<company>' [--team …] --found <N> [--note …]`, even when N is 0, so `due` can
+     tell «не искали» from «искали, публичных нет».
+  3. Tracker F gets «dd.mm (+3 раб. дня): написать <имя> (<роль>, <канал>)» or «писать некому (публичных нет)»; H gets one
+     line on where the contact came from.
+  If a company already has contacts for that team in `contacts.py map`, skip the search and reuse them.
 - If the form was opaque (no confirmation, no resume upload, a general programme registration, or a
   bot instead of screening), offer the `job-contacts` skill for that company: find the recruiter or
   team lead from public sources and write to them directly.

@@ -7,6 +7,8 @@
   contacts.py map [company]                 # дерево компания → команда → люди
   contacts.py due [--today YYYY-MM-DD] [--days N]   # кому пора написать (отклик ≥N раб. дней, по умолч. 3) / напомнить
   contacts.py log <value> sent|followup|replied|bounced|skip [--note TXT]
+  contacts.py searched --company C [--team T] --found N [--note TXT]   # поиск сделан (и пустой тоже)
+  contacts.py searches [--company C]        # когда и что искали
 
 Данные: $JOB_APPLY_HOME (по умолчанию ~/.local/share/job-apply): contacts.tsv, outreach.tsv, applied.tsv.
 Правило: контакт без source_url не сохраняется. Только то, что человек сам опубликовал как рабочее.
@@ -16,6 +18,9 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("JOB_APPLY_HOME", "~/.local/share/job-apply")).expanduser()
 CONTACTS, OUTREACH, APPLIED = HOME / "contacts.tsv", HOME / "outreach.tsv", HOME / "applied.tsv"
+SEARCHES = HOME / "searches.tsv"
+S_FIELDS = ["date", "company", "team", "found", "note"]
+RESEARCH_DAYS = 14         # пустой поиск можно повторить через две недели
 C_FIELDS = ["company", "team", "name", "role", "channel", "value", "source_url",
             "found_at", "status", "last_contact_at", "note"]
 O_FIELDS = ["date", "company", "name", "channel", "value", "action", "note"]
@@ -257,11 +262,38 @@ def cmd_due(a):
         per = {}
         for r in people:
             per.setdefault(r["name"], []).append(f"{r['channel']} {r['value']}")
-        who = "; ".join(f"{n} — {', '.join(ch)}" for n, ch in list(per.items())[:2]) \
-            or "контактов нет → найти (SKILL.md, шаг 2)"
+        who = "; ".join(f"{n} — {', '.join(ch)}" for n, ch in list(per.items())[:2]) or no_contacts(row["company"], now)
         print(f"написать   {row['company']} — «{row['title']}», отклик {d} ({workdays(d, now)} раб. дн.): {who}")
     if not any_:
         print("ничего не горит")
+
+
+def last_search(company):
+    k = norm(company)
+    hits = [r for r in read_tsv(SEARCHES, S_FIELDS) if norm(r["company"]) and (norm(r["company"]) in k or k in norm(r["company"]))]
+    return max(hits, key=lambda r: r["date"]) if hits else None
+
+
+def no_contacts(company, now):
+    s = last_search(company)
+    if not s:
+        return "контактов нет, поиск не делали → найти (SKILL.md, шаг 2)"
+    age = (now - dt.date.fromisoformat(s["date"])).days
+    tail = " → можно повторить поиск" if age >= RESEARCH_DAYS else ""
+    return f"искали {s['date']}, публичных нет{(' (' + s['note'] + ')') if s['note'] else ''}{tail}"
+
+
+def cmd_searched(a):
+    append_tsv(SEARCHES, S_FIELDS, dict(date=today().isoformat(), company=a.company, team=a.team or "",
+                                        found=str(a.found), note=a.note or ""))
+    print(f"OK: поиск {a.company}: найдено {a.found}")
+
+
+def cmd_searches(a):
+    for r in read_tsv(SEARCHES, S_FIELDS):
+        if not a.company or norm(a.company) in norm(r["company"]):
+            print(f"{r['date']}  {r['company']}{' / ' + r['team'] if r['team'] else ''}: {r['found']}"
+                  f"{'  — ' + r['note'] if r['note'] else ''}")
 
 
 def cmd_log(a):
@@ -300,6 +332,9 @@ def main():
     d = sub.add_parser("due"); d.add_argument("--today"); d.add_argument("--days", type=int, default=3,
                                                                     help="рабочих дней после отклика")
     d.set_defaults(f=cmd_due)
+    sr = sub.add_parser("searched"); sr.add_argument("--company", required=True); sr.add_argument("--team")
+    sr.add_argument("--found", type=int, required=True); sr.add_argument("--note"); sr.set_defaults(f=cmd_searched)
+    ss = sub.add_parser("searches"); ss.add_argument("--company"); ss.set_defaults(f=cmd_searches)
     lg = sub.add_parser("log"); lg.add_argument("value")
     lg.add_argument("action", choices=["sent", "followup", "replied", "bounced", "skip"]); lg.add_argument("--note")
     lg.set_defaults(f=cmd_log)
