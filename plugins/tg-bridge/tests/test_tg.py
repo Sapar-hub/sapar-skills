@@ -75,13 +75,13 @@ class T(unittest.TestCase):
         self.pair()
         self.tg.write_atomic(self.tg.d("asks", "q1.json"), json.dumps({"mode": "text", "options": [], "message_id": 7}))
         fwd = msg(42, "Добрый день, приглашаем на интервью",
-                  forward_origin={"type": "user", "date": 1, "sender_user": {"id": 5, "username": "hr_ozon",
-                                                                             "first_name": "Яна"}})
+                  forward_origin={"type": "user", "date": 1, "sender_user": {"id": 5, "username": "hr_example",
+                                                                             "first_name": "Анна"}})
         self.assertEqual(self.tg.route(self.api, fwd), "inbox")
         items = list((self.tg.DATA / "inbox").glob("*.json"))
         item = json.loads(items[0].read_text())
         self.assertTrue(item["untrusted"])
-        self.assertEqual(item["forward_origin"]["username"], "hr_ozon")
+        self.assertEqual(item["forward_origin"]["username"], "hr_example")
         self.assertFalse((self.tg.DATA / "answers" / "q1").exists())
 
     def test_photo_downloaded(self):
