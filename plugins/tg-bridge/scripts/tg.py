@@ -371,6 +371,8 @@ def route(api, upd):
         return f"q:{target}={text}"
     if text.startswith("/"):
         return command(api, me, msg, text)
+    if any(k.startswith(("forum_topic_", "general_forum_topic_")) for k in msg) or msg.get("pinned_message"):
+        return "drop:service"                                     # «тема создана» и пр. — не пересылка, без фантомной сессии
     agent = load_agent()
     if agent and text and not msg.get("forward_origin"):          # свой текст = задача агенту
         enqueue_task(api, me, msg, text, thread)                  # в общем чате — новая вкладка, во вкладке — её сессия

@@ -267,7 +267,8 @@ def cmd_run(a):
                 m = 1 if hits(it["html"] or it["title"], patterns) else 0
             # архив новой ленты старше MAX_AGE_DAYS не шлём, только запоминаем
             skip = (strict and not m) or bool(it["pub"]) and it["pub"][:10] < cutoff
-            cur = c.execute("insert or ignore into items values(?,?,?,?,?,?,?,?,?)",
+            cur = c.execute("insert or ignore into items(guid, feed, title, link, html, pub, matched, fetched_at, sent_at)"
+                            " values(?,?,?,?,?,?,?,?,?)",                # явные колонки: state добавлен миграцией
                             (it["guid"], name, to_text(it["title"]), it["link"], it["html"], it["pub"], m, now,
                              now if skip else None))
             new += cur.rowcount

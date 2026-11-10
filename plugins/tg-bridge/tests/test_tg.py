@@ -159,6 +159,13 @@ class Topics(Agent):
         self.assertEqual(self.tg.route(self.api, msg(42, "другое", mid=13, message_thread_id=88, is_topic_message=True)), "task")
         self.assertEqual(self.tg.route(self.api, msg(42, "1234", mid=14, message_thread_id=77, is_topic_message=True)), "q:q1=1234")
 
+    def test_topic_created_service_message_is_dropped(self):
+        svc = msg(42, "", mid=113, message_thread_id=77, is_topic_message=True,
+                  forum_topic_created={"name": "Стажер BI-разработчик в Авито", "icon_color": 1})
+        self.assertEqual(self.tg.route(self.api, svc), "drop:service")
+        self.assertFalse(list((self.tg.DATA / "tasks").glob("*.json")))
+        self.assertFalse(list((self.tg.DATA / "inbox").glob("*.json")))
+
     def test_forward_in_tab_tagged_and_filtered(self):
         fwd = msg(42, "вопрос 2", mid=15, message_thread_id=77, is_topic_message=True,
                   forward_origin={"type": "user", "date": 1, "sender_user": {"id": 9, "first_name": "Бот"}})

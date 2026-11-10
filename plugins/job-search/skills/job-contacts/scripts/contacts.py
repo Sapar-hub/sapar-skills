@@ -309,7 +309,8 @@ def cmd_log(a):
     stamp = today().isoformat()
     append_tsv(OUTREACH, O_FIELDS, dict(date=stamp, company=r["company"], name=r["name"], channel=r["channel"],
                                         value=r["value"], action=a.action, note=a.note or ""))
-    new = {"sent": "contacted", "followup": "contacted"}.get(a.action, a.action)
+    # answered = наш ответ в ветку на их письмо: не касание (touches его не считает), диалог идёт
+    new = {"sent": "contacted", "followup": "contacted", "answered": "replied"}.get(a.action, a.action)
     for x in rows:                       # статус и дата — на все каналы этого человека
         if norm(x["company"]) == norm(r["company"]) and norm(x["name"]) == norm(r["name"]):
             x["status"] = new
@@ -336,7 +337,7 @@ def main():
     sr.add_argument("--found", type=int, required=True); sr.add_argument("--note"); sr.set_defaults(f=cmd_searched)
     ss = sub.add_parser("searches"); ss.add_argument("--company"); ss.set_defaults(f=cmd_searches)
     lg = sub.add_parser("log"); lg.add_argument("value")
-    lg.add_argument("action", choices=["sent", "followup", "replied", "bounced", "skip"]); lg.add_argument("--note")
+    lg.add_argument("action", choices=["sent", "followup", "replied", "answered", "bounced", "skip"]); lg.add_argument("--note")
     lg.set_defaults(f=cmd_log)
     a = p.parse_args()
     a.f(a)
