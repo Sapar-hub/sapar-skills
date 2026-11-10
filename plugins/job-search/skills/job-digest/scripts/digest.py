@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """RSS (RSSHub/Telegram и любые ленты) -> фильтр по ключевым словам -> дайджест в папку Mail.ru.
 
-  digest.py run [--dry-run] [--force]   # забрать ленты, положить дайджест в почту
+  digest.py run [--dry-run] [--force] [--tg]   # забрать ленты, дайджест в почту (+ каждый пост в Telegram)
   digest.py show [--days N] [--all]     # вывести найденное из локальной базы
   digest.py feeds                       # проверить, что ленты отвечают
+  digest.py tg <id>...                  # (пере)прислать посты в Telegram с кнопками
+  digest.py item <id>                   # весь пост и вакансии в нём (для job-apply)
+  digest.py queue <id.n> | skip <id> | bl <id.n>   # действия кнопок: в очередь откликов / скип / на разбор в blacklist
+
+Telegram: команда `tg` из плагина tg-bridge. Кнопки — tg actions digest-queue/-skip/-bl (их ставит install.sh).
+Очередь откликов: $JOB_APPLY_HOME/queue.tsv (по умолчанию ~/.local/share/job-apply) — её разбирает job-apply worker.
 
 Конфиг:  $JOB_DIGEST_CONFIG (по умолчанию ~/.config/job-digest): feeds.txt, keywords.txt
 Состояние: $JOB_DIGEST_STATE (по умолчанию ~/.local/state/job-digest/items.db)
 Почта:   MAILRU_USER, MAILRU_APPPASS (пароль для внешних приложений), JOB_DIGEST_FOLDER (Вакансии)
 """
-import argparse, base64, datetime as dt, email.utils, html, imaplib, os, re, sqlite3, sys, time
+import argparse, base64, datetime as dt, email.utils, html, imaplib, os, re, shutil, sqlite3, subprocess, sys, time
 import urllib.request, xml.etree.ElementTree as ET
 from email.message import EmailMessage
 from pathlib import Path
@@ -20,6 +26,8 @@ FOLDER = os.environ.get("JOB_DIGEST_FOLDER", "Вакансии")
 IMAP_HOST = "imap.mail.ru"
 MAX_AGE_DAYS = int(os.environ.get("JOB_DIGEST_MAX_AGE_DAYS", 14))
 ATOM = "{http://www.w3.org/2005/Atom}"
+APPLY_HOME = Path(os.environ.get("JOB_APPLY_HOME", "~/.local/share/job-apply")).expanduser()
+QUEUE_FIELDS = ["date", "key", "status", "feed", "title", "href", "details", "post", "note"]  # = job-apply/scripts/queue.py
 
 
 def die(msg):
@@ -149,6 +157,8 @@ def db():
     c.execute("""create table if not exists items(
         guid text primary key, feed text, title text, link text, html text, pub text,
         matched integer, fetched_at text, sent_at text)""")
+    if "state" not in [r[1] for r in c.execute("pragma table_info(items)")]:
+        c.execute("alter table items add column state text")    # queued / skipped / bl-review (кнопки в Telegram)
     return c
 
 
@@ -171,17 +181,25 @@ def imap_utf7(s):
     return "".join(out)
 
 
-def build_message(rows, patterns, user):
-    # одна вакансия в нескольких каналах (репосты) — показываем один раз
+def post_hits(r, patterns):
+    return strict_hits(r, patterns) if r["matched"] == 2 else hits(r["html"], patterns)
+
+
+def found_posts(rows, patterns):
+    """Подходящие посты с их вакансиями; одна вакансия в нескольких каналах (репосты) — один раз."""
     seen, found = set(), []
     for r in rows:
         if not r["matched"]:
             continue
-        hs = strict_hits(r, patterns) if r["matched"] == 2 else hits(r["html"], patterns)
-        hs = [h for h in hs if not h[1] or h[1] == r["link"] or h[1] not in seen]
+        hs = [h for h in post_hits(r, patterns) if not h[1] or h[1] == r["link"] or h[1] not in seen]
         seen.update(h[1] for h in hs)
         if hs:
             found.append((r, hs))
+    return found
+
+
+def build_message(rows, patterns, user):
+    found = found_posts(rows, patterns)
     rest = [r for r in rows if not r["matched"]]
     feeds = sorted({r["feed"] for r, _ in found})
     subj = f"Вакансии: {len(found)} подходящих ({', '.join(feeds)}) — {dt.date.today():%d.%m}"
@@ -255,8 +273,8 @@ def cmd_run(a):
             new += cur.rowcount
     c.commit()
 
-    rows = [dict(zip(("guid", "feed", "title", "link", "html", "pub", "matched"), r)) for r in c.execute(
-        "select guid, feed, title, link, html, pub, matched from items where sent_at is null order by pub")]
+    rows = [dict(zip(COLS, r)) for r in c.execute(
+        f"select {', '.join(COLS)} from items where sent_at is null order by pub")]
     n_match = sum(1 for r in rows if r["matched"])
     print(f"новых: {new}, ждут отправки: {len(rows)}, подходящих: {n_match}")
     if not n_match and not (a.force and rows):
@@ -264,20 +282,135 @@ def cmd_run(a):
     msg = build_message(rows, patterns, os.environ.get("MAILRU_USER", "me@localhost"))
     if a.dry_run:
         print(msg.get_body(("plain",)).get_content())
+        if a.tg:
+            for r, hs in found_posts(rows, patterns):
+                print("--- tg ---\n" + tg_text(r, hs))
         return
     deliver(msg)
     c.executemany("update items set sent_at=? where guid=?", [(now, r["guid"]) for r in rows])
     c.commit()
     print(f"OK: «{msg['Subject']}» -> папка {FOLDER}")
+    if a.tg:
+        push_tg(found_posts(rows, patterns))
+
+
+# --- Telegram (tg-bridge) ---
+
+COLS = ("rowid", "guid", "feed", "title", "link", "html", "pub", "matched", "state")
+
+
+def tg_bin():
+    return shutil.which("tg") or (str(Path("~/.local/bin/tg").expanduser())
+                                  if Path("~/.local/bin/tg").expanduser().exists() else None)
+
+
+def tg_text(r, hs):
+    e = html.escape
+    out = [f'<b>{e(r["feed"])}</b> · {r["pub"][:10]} · <a href="{e(r["link"])}">пост</a>']
+    for n, (text, href, det) in enumerate(hs[:8], 1):
+        t = f'<a href="{e(href)}">{e(text)}</a>' if href else e(text)
+        out.append(f"{n}. {t}" + (f"\n    <i>{e(det)}</i>" if det else ""))
+    if len(hs) > 8:
+        out.append(f"…ещё {len(hs) - 8} в посте")
+    return "\n".join(out)
+
+
+def push_tg(found):
+    tg = tg_bin()
+    if not tg:
+        print("WARN: нет tg (плагин tg-bridge) — в Telegram не отправлено", file=sys.stderr)
+        return
+    for r, hs in found:
+        btns = []
+        for n in range(1, min(len(hs), 8) + 1):
+            btns += ["--button", f"✅ {n}=digest-queue:{r['rowid']}.{n}"]
+        btns += ["--button", f"скип=digest-skip:{r['rowid']}"]
+        if len(hs) == 1:
+            btns += ["--button", f"🚫=digest-bl:{r['rowid']}.1"]
+        p = subprocess.run([tg, "send", "--html", tg_text(r, hs), *btns], capture_output=True, text=True)
+        if p.returncode:
+            print(f"WARN: tg send: {p.stderr.strip()}", file=sys.stderr)
+        time.sleep(1.1)                                        # ~1 сообщение/с в один чат
+
+
+def get_row(c, rowid):
+    row = c.execute(f"select {', '.join(COLS)} from items where rowid=?", (int(rowid),)).fetchone()
+    if not row:
+        die(f"нет поста {rowid}")
+    return dict(zip(COLS, row))
+
+
+def parse_key(key):
+    rowid, _, n = key.partition(".")
+    return int(rowid), int(n or 1)
+
+
+def queue_add(c, key, status):
+    rowid, n = parse_key(key)
+    r = get_row(c, rowid)
+    hs = post_hits(r, load_patterns()) or [(r["title"], r["link"], "")]
+    if not 1 <= n <= len(hs):
+        die(f"в посте {rowid} нет вакансии {n}")
+    text, href, det = hs[n - 1]
+    f = APPLY_HOME / "queue.tsv"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    rows = [l.split("\t") for l in f.read_text(encoding="utf-8").splitlines()[1:]] if f.exists() else []
+    if any(x[1] == f"{rowid}.{n}" for x in rows):
+        print(f"уже в очереди: {text}")
+        return False
+    new = not f.exists()
+    with f.open("a", encoding="utf-8") as out:
+        if new:
+            out.write("\t".join(QUEUE_FIELDS) + "\n")
+        clean = lambda s: re.sub(r"[\t\n]+", " ", s or "")
+        out.write("\t".join(map(clean, [dt.date.today().isoformat(), f"{rowid}.{n}", status, r["feed"],
+                                         text, href, det, r["link"], ""])) + "\n")
+    c.execute("update items set state=? where rowid=?", ("queued" if status == "new" else status, rowid))
+    c.commit()
+    print(f"{status}: {text}")
+    return True
+
+
+def cmd_queue(a):
+    if queue_add(db(), a.key, "new") and shutil.which("systemctl"):
+        # worker job-apply (если поставлен) разбирает очередь; --no-block: кнопка не ждёт отклика
+        subprocess.run(["systemctl", "--user", "start", "--no-block", "job-apply-worker.service"],
+                       capture_output=True)
+
+
+def cmd_bl(a):
+    queue_add(db(), a.key, "bl-review")
+
+
+def cmd_skip(a):
+    c = db()
+    get_row(c, a.id)
+    c.execute("update items set state='skipped' where rowid=?", (int(a.id),))
+    c.commit()
+    print(f"skipped {a.id}")
+
+
+def cmd_item(a):
+    r = get_row(db(), a.id)
+    print(f"== {r['feed']} | {r['pub'][:10]} | {r['link']} | state={r['state'] or '-'}")
+    for n, (text, href, det) in enumerate(post_hits(r, load_patterns()), 1):
+        print(f"  {n}. {text}{' — ' + det if det else ''}{' <' + href + '>' if href else ''}")
+    print("\n" + to_text(r["html"]))
+
+
+def cmd_tg(a):
+    c, patterns = db(), load_patterns()
+    found = [(r, post_hits(r, patterns) or [(r["title"], r["link"], "")]) for r in (get_row(c, i) for i in a.ids)]
+    push_tg(found)
 
 
 def cmd_show(a):
     patterns = load_patterns()
     since = (dt.datetime.now() - dt.timedelta(days=a.days)).isoformat()
-    q = "select feed, pub, link, html, title, matched from items where (fetched_at >= ? or pub >= ?)"
+    q = "select rowid, feed, pub, link, html, title, matched, state from items where (fetched_at >= ? or pub >= ?)"
     q += "" if a.all else " and matched > 0"
-    for feed, pub, link, h, title, m in db().execute(q + " order by pub desc", (since, since)):
-        print(f"== {feed} | {pub[:10]} | {link}")
+    for rowid, feed, pub, link, h, title, m, state in db().execute(q + " order by pub desc", (since, since)):
+        print(f"== #{rowid} | {feed} | {pub[:10]} | {link}{' | ' + state if state else ''}")
         hs = strict_hits(dict(html=h, title=title, link=link), patterns) if m == 2 else hits(h, patterns)
         for text, href, det in hs or [(title, "", "")]:
             print(f"  * {text}{' — ' + det if det else ''}{' <' + href + '>' if href else ''}")
@@ -298,12 +431,19 @@ def main():
     r = sp.add_parser("run")
     r.add_argument("--dry-run", action="store_true", help="напечатать дайджест, не отправлять и не помечать")
     r.add_argument("--force", action="store_true", help="отправить, даже если подходящих нет")
+    r.add_argument("--tg", action="store_true", help="ещё и каждый подходящий пост в Telegram с кнопками")
     s = sp.add_parser("show")
     s.add_argument("--days", type=int, default=7)
     s.add_argument("--all", action="store_true", help="включая не прошедшие фильтр")
     sp.add_parser("feeds")
+    sp.add_parser("tg").add_argument("ids", nargs="+")
+    sp.add_parser("item").add_argument("id")
+    sp.add_parser("queue").add_argument("key")
+    sp.add_parser("bl").add_argument("key")
+    sp.add_parser("skip").add_argument("id")
     a = ap.parse_args()
-    {"run": cmd_run, "show": cmd_show, "feeds": cmd_feeds}[a.cmd](a)
+    {"run": cmd_run, "show": cmd_show, "feeds": cmd_feeds, "tg": cmd_tg, "item": cmd_item,
+     "queue": cmd_queue, "bl": cmd_bl, "skip": cmd_skip}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -54,6 +54,20 @@ Prefer tightening the filter over dropping a source. Posts older than 14 days
 (`JOB_DIGEST_MAX_AGE_DAYS`) are stored but not mailed, so a new feed's backlog stays out.
 The same vacancy link reposted by several channels is shown once.
 
+## Telegram (optional, plugin tg-bridge)
+
+When `tg` exists, `install.sh` runs `digest.py run --tg`. Each matching post also goes to the bot,
+with numbered vacancies and buttons. «✅ N» runs `digest.py queue <id>.N`, which writes to job-apply `queue.tsv`
+and starts `job-apply-worker`. «скип» runs `skip <id>`. «🚫» runs `bl <id>.1` (bl-review: the worker asks for the reason, then
+writes blacklist.tsv). `install.sh` registers these tg actions plus `contacts-log`/`contacts-replied`, and adds the
+daily follow-up from job-contacts (`due-tg.sh`).
+```bash
+python3 -I scripts/digest.py show --days 3        # ids (#123) and state (queued/skipped/bl-review)
+python3 -I scripts/digest.py item 123              # whole post + numbered vacancies
+python3 -I scripts/digest.py tg 123 124            # (re)send posts to Telegram
+python3 -I scripts/digest.py run --dry-run --tg    # print what would go to Telegram
+```
+
 ## Install / debug
 
 ```bash

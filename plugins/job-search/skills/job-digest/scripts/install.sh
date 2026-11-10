@@ -38,7 +38,8 @@ for f in feeds.txt keywords.txt mail-rules.json; do
 done
 
 # 3. пароль: из fish universal vars (если они там есть), иначе из $CONF/env (chmod 600)
-RUN="/usr/bin/env python3 -I $HERE/scripts/digest.py run"
+TG=$(command -v tg || { [ -x "$HOME/.local/bin/tg" ] && echo "$HOME/.local/bin/tg"; } || true)
+RUN="/usr/bin/env python3 -I $HERE/scripts/digest.py run${TG:+ --tg}"
 SORT="/usr/bin/env python3 -I $HERE/scripts/mailsort.py"
 if command -v fish >/dev/null && fish -c 'set -q MAILRU_USER; and set -q MAILRU_APPPASS'; then
   EXEC="$(command -v fish) -c 'exec $RUN'"
@@ -48,6 +49,23 @@ else
   EXEC="$RUN"
   EXEC_SORT="$SORT"
   grep -q '^MAILRU_APPPASS=.' "$CONF/env" || echo "WARN: заполни $CONF/env (пароль для внешних приложений Mail.ru)"
+fi
+
+# 4. Telegram (плагин tg-bridge, если поставлен): каждый подходящий пост с кнопками, follow-up из job-contacts
+EXEC_DUE=""
+if [ -n "$TG" ]; then
+  PY=$(command -v python3)
+  D="$HERE/scripts/digest.py"
+  "$TG" action add digest-queue -- "$PY" -I "$D" queue {arg} >/dev/null
+  "$TG" action add digest-skip  -- "$PY" -I "$D" skip {arg} >/dev/null
+  "$TG" action add digest-bl    -- "$PY" -I "$D" bl {arg} >/dev/null
+  C=$(cd "$HERE/../job-contacts/scripts" 2>/dev/null && pwd || true)
+  if [ -n "$C" ]; then
+    "$TG" action add contacts-log     -- "$PY" -I "$C/contacts.py" log {arg} sent >/dev/null
+    "$TG" action add contacts-replied -- "$PY" -I "$C/contacts.py" log {arg} replied >/dev/null
+    EXEC_DUE="ExecStartPost=-/bin/sh $C/due-tg.sh"
+  fi
+  echo "OK: Telegram через $TG (actions: digest-queue/-skip/-bl, contacts-log/-replied)"
 fi
 
 mkdir -p "$UNIT_DIR"
@@ -62,6 +80,7 @@ Type=oneshot
 EnvironmentFile=-$CONF/env
 ExecStart=$EXEC
 ExecStartPost=$EXEC_SORT
+$EXEC_DUE
 EOF
 cat > "$UNIT_DIR/job-digest.timer" <<EOF
 [Unit]
