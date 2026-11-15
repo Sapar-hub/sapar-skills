@@ -79,6 +79,8 @@ OSINT-разведка найма в обход ATS: кто рекрутируе
 Напоминание — 2–3 предложения, ссылка на первое письмо, `send.py --followup`.
 Ответ пришёл → `contacts.py log <value> replied`, переписку — в столбец N трекера. Bounce → `bounced`.
 
+Из Telegram пользователь заводит и логирует контакты сам, без агента: `/contact Компания; Имя; @ник|email|+7…|linkedin; [роль]; [источник-URL]; [team: …]; [заметка]` (→ `contacts.py quick`; для @ника без источника — t.me/ник, для email и телефона источник обязателен) и `/contact_log @ник написал|ответил|отказ|пропуск [заметка]` (→ `contacts.py quicklog`). `/contact` без текста печатает формат. Строки с пометкой «[добавлено из TG]» в note пришли оттуда.
+
 С tg-bridge: `due` приходит в Telegram сам после ежедневного дайджеста (`scripts/due-tg.sh`, ExecStartPost у job-digest).
 Ответ рекрутера в TG пользователь **пересылает боту** → `tg inbox`: `forward_origin.username`/`name` сверить с
 `contacts.tsv` (`@handle` или имя) → `contacts.py log <value> replied` + текст и дата в N трекера, F/E обновить.

@@ -20,7 +20,7 @@
 Данные: $TG_BRIDGE_DATA (~/.local/share/tg-bridge): state.json, asks/, answers/, btn/, inbox/
 Привязка: первый /start в личке боту, пока файла chat нет. Всё из других чатов отбрасывается.
 """
-import argparse, fcntl, json, mimetypes, os, secrets, subprocess, sys, time, urllib.error, urllib.request
+import argparse, fcntl, json, mimetypes, os, re, secrets, subprocess, sys, time, urllib.error, urllib.request
 from pathlib import Path
 
 CONF = Path(os.environ.get("TG_BRIDGE_CONFIG", "~/.config/tg-bridge")).expanduser()
@@ -233,6 +233,39 @@ def load_actions():
     return json.loads(f.read_text()) if f.exists() else {}
 
 
+CMD_REPLY_TTL = 1800
+
+
+def pending_command(reply_to):
+    """Имя action, если reply_to — свежая подсказка команды; старые подсказки удаляются."""
+    if not reply_to:
+        return None
+    f = DATA / "cmdreply" / f"{reply_to}.json"
+    try:
+        j = json.loads(f.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if time.time() - j.get("created", 0) > CMD_REPLY_TTL:
+        f.unlink(missing_ok=True)
+        return None
+    return j.get("action")
+
+
+def load_command_meta():
+    """commands.json: {action: {"desc": для меню и /help, "hint": серая подсказка в поле ввода}}.
+    Старый вид {action: "desc"} тоже читается."""
+    f = CONF / "commands.json"
+    try:
+        raw = json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {k: (v if isinstance(v, dict) else {"desc": v}) for k, v in raw.items()}
+
+
+def load_command_desc():
+    return {k: v.get("desc", "") for k, v in load_command_meta().items() if v.get("desc")}
+
+
 def run_action(name, arg):
     argv = load_actions().get(name)
     if not argv:
@@ -363,12 +396,24 @@ def route(api, upd):
                  and not (DATA / "answers" / q).exists()}
     reply_to = (msg.get("reply_to_message") or {}).get("message_id")
     target = next((q for q, x in asks.items() if x.get("message_id") == reply_to), None) if reply_to else None
-    if target is None and len(text_asks) == 1 and text and not msg.get("forward_origin"):
+    pending_name = pending_command(reply_to)                   # реплай на подсказку команды (её аргумент)
+    to_cmd = bool(pending_name)
+    if target is None and len(text_asks) == 1 and text and not msg.get("forward_origin") and not to_cmd:
         target = next(iter(text_asks))
     if target and text:                                        # реплай на вопрос с кнопками — тоже ответ (свободный)
         answer(target, text)
         react(api, me, msg["message_id"])
         return f"q:{target}={text}"
+    if pending_name and text and not text.startswith("/"):
+        # реплай на подсказку команды («/contact» без текста) = её аргумент; подсказка живёт CMD_REPLY_TTL,
+        # так что можно ответить на неё несколько раз (несколько контактов подряд)
+        name = pending_name
+        if name in load_actions():
+            code, out = run_action(name, text)
+            api.call("sendMessage", chat_id=me, text=(out or "пусто")[-3500:] if code == 0
+                     else f"{name}: ошибка, код {code}\n{out[-800:]}", message_thread_id=thread,
+                     reply_parameters={"message_id": msg["message_id"]}, link_preview_options={"is_disabled": True})
+            return f"cmd:{name}+reply"
     if text.startswith("/"):
         return command(api, me, msg, text)
     if any(k.startswith(("forum_topic_", "general_forum_topic_")) for k in msg) or msg.get("pinned_message"):
@@ -397,7 +442,8 @@ HELP = """Одна вкладка = одна задача со своим кон
 /status — что идёт и что в очереди
 /stop — прервать текущий прогон
 /inbox — непрочитанное"""
-COMMANDS = [("status", "что идёт и что в очереди"), ("stop", "прервать прогон"), ("inbox", "непрочитанное")]
+COMMANDS = [("help", "все команды с примерами"), ("status", "что идёт и что в очереди"), ("stop", "прервать прогон"),
+            ("inbox", "непрочитанное")]
 
 
 def load_agent():
@@ -466,7 +512,12 @@ def command(api, me, msg, text):
     say = lambda t: api.call("sendMessage", chat_id=me, text=t, message_thread_id=msg_thread(msg),
                              link_preview_options={"is_disabled": True})
     if name in ("start", "help"):
-        say(HELP if load_agent() else "Пересылай сообщения и файлы — уйдут в inbox. /inbox — что там.")
+        head = HELP if load_agent() else "Пересылай сообщения и файлы — уйдут в inbox. /inbox — что там."
+        meta, acts = load_command_meta(), load_actions()
+        extra = [f"/{k} — {meta[k]['desc']}" + (f"\n    пример: {meta[k]['hint']}" if meta[k].get("hint") else "")
+                 for k in acts if k in meta and meta[k].get("desc") and re.fullmatch(r"[a-z0-9_]{1,32}", k)]
+        say(head + ("\n\nЕщё команды:\n" + "\n".join(extra) if extra else "")
+            + "\n\nКоманда с аргументами без текста (например /contact) пришлёт пример — ответь на него реплаем.")
     elif name == "inbox":
         say(inbox_summary())
     elif name == "new":
@@ -495,8 +546,23 @@ def command(api, me, msg, text):
             lines.append(f"\nВ очереди: {len(tasks)}")
             lines += [f"- {json.loads(t.read_text()).get('text') or 'пересланное'}"[:82] for t in tasks[:10]]
         say("\n".join(lines))
-    elif name in load_actions() and not any("{arg}" in x for x in load_actions()[name]):
-        code, out = run_action(name, "")                          # /queue и т.п. — action без аргумента
+    elif name in load_actions():
+        # /queue — action без аргумента; /contact Acme; Анна; @x — текст после команды целиком идёт в {arg}
+        # (одним элементом argv, без shell). Пустой текст у команды с {arg} -> "help": скрипт печатает формат.
+        rest = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+        takes_arg = any("{arg}" in x for x in load_actions()[name])
+        if takes_arg and not rest:
+            # без текста: формат от самого скрипта + поле ввода с подсказкой; реплай на это сообщение = аргумент
+            code, out = run_action(name, "help")
+            hint = load_command_meta().get(name, {}).get("hint", "")
+            m = api.call("sendMessage", chat_id=me, message_thread_id=msg_thread(msg),
+                         text=((out or f"/{name}: напиши аргумент") + "\n\nОтветь на это сообщение — уйдёт в /" + name + " (реплаями 30 мин, можно несколько)")[-3500:],
+                         reply_markup={"force_reply": True, "input_field_placeholder": (hint or "аргумент")[:64]},
+                         link_preview_options={"is_disabled": True})
+            if isinstance(m, dict) and m.get("message_id"):
+                write_atomic(d("cmdreply", f"{m['message_id']}.json"), json.dumps({"action": name, "created": time.time()}))
+            return f"cmd:{name}?"
+        code, out = run_action(name, rest if takes_arg else "")
         say((out or "пусто")[-3500:] if code == 0 else f"{name}: ошибка, код {code}\n{out[-800:]}")
     else:
         say(f"Нет команды /{name}. /help")
@@ -570,7 +636,9 @@ def cmd_daemon(a):
     lock.acquire(block=True)
     print(f"tg-bridge daemon: chat={chat_id() or 'не привязан, жду /start'}", flush=True)
     try:                                                          # меню команд в клиенте Telegram
-        extra = [(k, "action") for k, v in load_actions().items() if not any("{arg}" in x for x in v)]
+        desc = load_command_desc()                                # action с описанием (или без {arg}) = команда в меню
+        extra = [(k, desc.get(k, "action")) for k, v in load_actions().items()
+                 if re.fullmatch(r"[a-z0-9_]{1,32}", k) and (k in desc or not any("{arg}" in x for x in v))]
         cmds = (COMMANDS if load_agent() else [("inbox", "непрочитанное")]) + extra
         api.call("setMyCommands", commands=[{"command": c, "description": t} for c, t in cmds])
     except Exception as e:
@@ -673,10 +741,17 @@ def cmd_action(a):
         return
     if not a.name:
         die("нужно имя action")
+    descs = load_command_meta()
     if a.op == "rm":
         acts.pop(a.name, None)
+        descs.pop(a.name, None)
     else:
-        argv = a.argv[1:] if a.argv and a.argv[0] == "--" else a.argv
+        argv = list(a.argv)
+        while argv[:1] in (["--desc"], ["--hint"]) and len(argv) > 1:   # NAME --desc "…" --hint "…" -- argv...
+            key, limit = (("desc", 256) if argv[0] == "--desc" else ("hint", 64))
+            descs.setdefault(a.name, {})[key] = argv[1][:limit]
+            argv = argv[2:]
+        argv = argv[1:] if argv and argv[0] == "--" else argv
         if not argv:
             die("tg action add NAME -- argv... ({arg} — аргумент кнопки)")
         if not Path(argv[0]).is_absolute():
@@ -684,6 +759,7 @@ def cmd_action(a):
         acts[a.name] = argv
     CONF.mkdir(parents=True, exist_ok=True)
     write_atomic(CONF / "actions.json", json.dumps(acts, ensure_ascii=False, indent=1))
+    write_atomic(CONF / "commands.json", json.dumps(descs, ensure_ascii=False, indent=1))
     print(f"OK: {a.op} {a.name}")
 
 

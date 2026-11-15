@@ -17,6 +17,12 @@ tg ask "Код из SMS для job.mts.ru" --text     # the user replies with te
 tg inbox                                      # forwarded items as JSON lines, moved to inbox/done/
 tg inbox --peek | --count
 tg action add contacts-log -- /usr/bin/python3 -I /abs/contacts.py log {arg} sent
+tg action add contact --desc "контакт: Компания; Имя; @ник" -- /usr/bin/python3 -I /abs/contacts.py quick -- {arg}
+# action с {arg} и --desc = ещё и команда в меню бота: «/contact <текст>» отдаёт весь текст после команды в {arg}
+# (один элемент argv, без shell). Имя команды: [a-z0-9_]. Меню обновляется при старте демона.
+# --hint "пример" (≤64 симв.): «/contact» без текста присылает формат (вывод action с "help") с force_reply и этой
+# серой подсказкой в поле ввода; реплаи на это сообщение 30 мин идут в action как {arg}. /help перечисляет команды
+# с описаниями и примерами (~/.config/tg-bridge/commands.json: {name: {desc, hint}}).
 tg send "Написал @hr?" --button "отправил=contacts-log:@hr"
 tg edit <message_id> "новый текст" [--html]  # rewrite own message in place: live status, no notification
 tg whoami

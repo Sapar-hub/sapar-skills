@@ -320,6 +320,79 @@ def cmd_log(a):
     print(f"OK: {r['name']} → {r['status']}")
 
 
+QUICK_HELP = """Формат (поля через «;», первые три обязательны):
+  /contact Компания; Имя; @ник | email | +7… | linkedin-ссылка; [роль]; [источник-URL]; [team: команда]; [заметка]
+Роль: рекрутер, hr-бренд, нанимающий, лид, инженер (или recruiter/lead/…); по умолчанию рекрутер.
+Источник — где контакт опубликован или кто его дал; для @ника без источника берётся t.me/ник.
+Пример: /contact Acme; Анна Иванова; @anna_hr; рекрутер; https://t.me/acme_careers; team: Data; дал HR-аккаунт"""
+
+ROLE_WORDS = {"рекрут": "recruiter", "hr-бренд": "hr-brand", "бренд": "hr-brand", "нанима": "hiring-manager",
+              "hiring": "hiring-manager", "лид": "lead", "руковод": "lead", "head": "lead", "инженер": "engineer",
+              "разработ": "engineer", "engineer": "engineer"}
+
+
+def channel_of(value):
+    v = value.strip()
+    if re.search(r"linkedin\.com/", v, re.I):
+        return "linkedin", v
+    if EMAIL.fullmatch(v.lower()):
+        return "email", v
+    if re.fullmatch(r"@?[A-Za-z][A-Za-z0-9_]{3,31}", v) or re.search(r"t\.me/", v):
+        return "tg", v
+    if re.fullmatch(r"\+?[\d\s()\-]{10,18}", v):
+        return "phone", re.sub(r"[^\d+]", "", v)
+    return "other", v
+
+
+def cmd_quick(a):
+    """Контакт одной строкой (команда /contact в Telegram-боте)."""
+    text = " ".join(a.text).strip()
+    if not text or text in ("help", "?"):
+        print(QUICK_HELP)
+        return
+    f = [x.strip() for x in re.split(r"[;\n]", text) if x.strip()]
+    if len(f) < 3:
+        die("нужно минимум: Компания; Имя; контакт\n\n" + QUICK_HELP)
+    company, name, raw = f[:3]
+    channel, value = channel_of(raw)
+    role, source, team, notes = "recruiter", "", "", []
+    for x in f[3:]:
+        low = x.lower()
+        if re.match(r"https?://", x):
+            source = x
+        elif low.startswith(("team:", "команда:")):
+            team = x.split(":", 1)[1].strip()
+        elif low in ROLES:
+            role = low
+        elif any(low.startswith(k) or k in low.split() for k in ROLE_WORDS) and len(low) < 25:
+            role = next(r for k, r in ROLE_WORDS.items() if low.startswith(k) or k in low.split())
+        else:
+            notes.append(x)
+    if not source and channel == "tg":
+        source = "https://t.me/" + value.lstrip("@").split("t.me/")[-1].strip("/")
+    if not source:
+        die(f"нужен источник-URL (где опубликован контакт или чей пост/страница): {company}; {name}; {raw}; <URL>")
+    cmd_add(argparse.Namespace(company=company, name=name, role=role, channel=channel, value=value,
+                               source=source, team=team, note="; ".join(notes) + " [добавлено из TG]"))
+
+
+def cmd_quicklog(a):
+    """/contact_log @ник|email sent|followup|replied|answered|bounced|skip [заметка]"""
+    words = " ".join(a.text).split()
+    acts = ["sent", "followup", "replied", "answered", "bounced", "skip"]
+    ru = {"написал": "sent", "отправил": "sent", "фоллоуап": "followup", "ответил": "replied",
+          "ответила": "replied", "ответили": "replied", "отказ": "replied", "отскок": "bounced", "пропуск": "skip"}
+    if len(words) < 2:
+        die("формат: /contact_log @ник|email действие [заметка]\nдействие: " + ", ".join(acts)
+            + " (или: написал, ответил(а), отказ, пропуск)")
+    value, act = words[0], ru.get(words[1].lower(), words[1].lower())
+    if act not in acts:
+        die(f"действие «{words[1]}»: одно из {acts}")
+    if channel_of(value)[0] == "tg":
+        value = "@" + value.lstrip("@").split("t.me/")[-1].strip("/")
+    cmd_log(argparse.Namespace(value=value, action=act, note=" ".join(words[2:]) or None))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -339,6 +412,10 @@ def main():
     lg = sub.add_parser("log"); lg.add_argument("value")
     lg.add_argument("action", choices=["sent", "followup", "replied", "answered", "bounced", "skip"]); lg.add_argument("--note")
     lg.set_defaults(f=cmd_log)
+    q = sub.add_parser("quick", help="контакт одной строкой (Telegram /contact)")
+    q.add_argument("text", nargs="*"); q.set_defaults(f=cmd_quick)
+    ql = sub.add_parser("quicklog", help="лог одной строкой (Telegram /contact_log)")
+    ql.add_argument("text", nargs="*"); ql.set_defaults(f=cmd_quicklog)
     a = p.parse_args()
     a.f(a)
 

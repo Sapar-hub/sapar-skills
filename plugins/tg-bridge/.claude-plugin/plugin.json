@@ -1,6 +1,6 @@
 {
   "name": "tg-bridge",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Telegram bot as the human-in-the-loop channel for agents: blocking questions with buttons or a text reply (submit gates, SMS codes), notifications, an inbox for forwarded messages and files, and one-tap buttons that run whitelisted local commands.",
   "author": {
     "name": "Sapar",
@@ -9,5 +9,11 @@
   "homepage": "https://github.com/Sapar-hub/sapar-skills",
   "repository": "https://github.com/Sapar-hub/sapar-skills",
   "license": "MIT",
-  "keywords": ["telegram", "bot-api", "human-in-the-loop", "notifications", "approval"]
+  "keywords": [
+    "telegram",
+    "bot-api",
+    "human-in-the-loop",
+    "notifications",
+    "approval"
+  ]
 }

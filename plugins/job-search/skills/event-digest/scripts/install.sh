@@ -35,8 +35,8 @@ done
 "$TG" action add event-go   -- "$PY" -I "$E" go {arg} >/dev/null
 "$TG" action add event-skip -- "$PY" -I "$E" skip {arg} >/dev/null
 # action без {arg} = команда в боте: /events — ближайшие и статусы, /eventlog — цели и разборы
-"$TG" action add events   -- "$PY" -I "$E" show --days 1 >/dev/null
-"$TG" action add eventlog -- "$PY" -I "$E" log >/dev/null
+"$TG" action add events --desc "митапы на ближайшие дни и статус «Иду»" -- "$PY" -I "$E" show --days 1 >/dev/null
+"$TG" action add eventlog --desc "цели и разборы прошедших походов на митапы" -- "$PY" -I "$E" log >/dev/null
 
 mkdir -p "$UNIT_DIR"
 cat > "$UNIT_DIR/event-digest.service" <<EOF

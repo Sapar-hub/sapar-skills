@@ -63,6 +63,9 @@ if [ -n "$TG" ]; then
   if [ -n "$C" ]; then
     "$TG" action add contacts-log     -- "$PY" -I "$C/contacts.py" log {arg} sent >/dev/null
     "$TG" action add contacts-replied -- "$PY" -I "$C/contacts.py" log {arg} replied >/dev/null
+    # команды в боте: /contact Компания; Имя; @ник|email; … и /contact_log @ник написал|ответил …
+    "$TG" action add contact --desc "добавить контакт: Компания; Имя; @ник|email; [роль]; [URL]" --hint "Acme; Анна Иванова; @anna_hr; рекрутер; https://t.me/…" -- "$PY" -I "$C/contacts.py" quick -- {arg} >/dev/null
+    "$TG" action add contact_log --desc "отметить контакт: @ник написал|ответил|отказ [заметка]" --hint "@anna_hr написал пинг по вакансии" -- "$PY" -I "$C/contacts.py" quicklog -- {arg} >/dev/null
     EXEC_DUE="ExecStartPost=-/bin/sh $C/due-tg.sh"
   fi
   echo "OK: Telegram через $TG (actions: digest-queue/-skip/-bl, contacts-log/-replied)"
