@@ -6,6 +6,7 @@
   events.py go <id> | skip <id>      действия кнопок
   events.py show [--days N] [--all]  события из базы; --all — и не прошедшие фильтр
   events.py log                      походы: цель и разбор
+  (в боте: /events = show --days 1, /eventlog = log)
   events.py parse "текст"            проверить распознавание даты
   events.py _ask <id> <date|eve|after>   (внутреннее) один вопрос в tg, ответ в базу
 
@@ -375,7 +376,10 @@ def cmd_show(a):
             print(f"{'+' if matched else '-'} #{rowid} {feed} | {title[:100]}")
         return
     c.row_factory = __import__("sqlite3").Row
-    for e in c.execute("select * from events where coalesce(start, '9') >= ? order by start", (since[:10],)):
+    rows = c.execute("select * from events where coalesce(start, '9') >= ? order by start", (since[:10],)).fetchall()
+    if not rows:
+        print("Ближайших событий нет. Анонсы приходят в 10:17.")
+    for e in rows:
         print(f"#{e['id']} {e['status']:9} {fmt(e['start'], e['start_is_guess']) if e['start'] else 'дата?':11}"
               f" {e['title'][:70]} <{e['link']}>")
 
@@ -383,8 +387,11 @@ def cmd_show(a):
 def cmd_log(a):
     c = db()
     c.row_factory = __import__("sqlite3").Row
-    for e in c.execute("select * from events where status in ('done', 'no_report', 'going') and goal is not null"
-                       " or report is not null order by start"):
+    rows = c.execute("select * from events where status in ('done', 'no_report', 'going') and goal is not null"
+                     " or report is not null order by start").fetchall()
+    if not rows:
+        print("Разборов пока нет: появятся после первого похода.")
+    for e in rows:
         print(f"== {fmt(e['start'])} {e['title']} [{e['status']}]\n  цель: {e['goal'] or '-'}\n"
               f"  разбор: {e['report'] or '-'}")
 

@@ -27,6 +27,7 @@ Files:
 python3 -I scripts/events.py show --days 1     # upcoming events with status (new/going/need_date/…)
 python3 -I scripts/events.py show --days 7 --all   # everything fetched, + passed / - filtered out
 python3 -I scripts/events.py log               # goals and debriefs of past events
+# in the bot: /events (= show --days 1) and /eventlog (= log)
 python3 -I scripts/events.py parse "20 ноября, 19:00–22:00"   # check date parsing
 ```
 
