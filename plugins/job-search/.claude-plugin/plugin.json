@@ -1,7 +1,7 @@
 {
   "name": "job-search",
-  "version": "1.7.1",
-  "description": "Job search for AI agents: daily vacancy digest from Telegram/RSS into Mail.ru, applying on employers' own career sites with a tailored resume, and reaching recruiters and team leads directly from public sources.",
+  "version": "1.8.0",
+  "description": "Job search for AI agents: daily vacancy digest from Telegram/RSS into Mail.ru, applying on employers' own career sites with a tailored resume, and reaching recruiters and team leads directly from public sources, plus a meetup digest with an «Иду» button, a goal ping the day before and a debrief ping after.",
   "author": {
     "name": "Sapar",
     "url": "https://github.com/Sapar-hub"
@@ -20,6 +20,7 @@
     "russian",
     "osint",
     "sourcing",
-    "outreach"
+    "outreach",
+    "meetups"
   ]
 }

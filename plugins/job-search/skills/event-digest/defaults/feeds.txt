@@ -1,0 +1,9 @@
+# Одна лента на строку: `<url> [link]`. RSSHub слушает 127.0.0.1:1200.
+# Telegram-канал: http://127.0.0.1:1200/telegram/channel/<username> (канал публичный: t.me/s/<username> открывается)
+# `link` — пост без кнопок «Иду/Скип», только ссылка: для подборок, где в одном посте много событий.
+http://127.0.0.1:1200/telegram/channel/ITMeeting
+http://127.0.0.1:1200/telegram/channel/datafest
+http://127.0.0.1:1200/telegram/channel/truetechcommunity
+http://127.0.0.1:1200/telegram/channel/yandexforml
+# Хабр, хаб «Конференции» (tech_events): по статье на событие, не подборки — поэтому с кнопками
+https://habr.com/ru/rss/hubs/tech_events/articles/
