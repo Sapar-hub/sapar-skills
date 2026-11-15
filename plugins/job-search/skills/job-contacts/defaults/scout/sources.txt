@@ -1,0 +1,38 @@
+# Источники scout: `<url> <kind> [company=<Канон из companies.txt>]`, по одному на строку.
+# kind: tg — пост канала через RSSHub; career — Habr Career (вакансии); habr — статьи блога компании (авторы).
+# company= задаёт компанию для канала самой компании (там её имя в каждом посте не пишут).
+# Ленты дайджеста (job-digest/items.db) scout читает сам, их сюда не дублировать.
+
+# --- каналы компаний (проверены через RSSHub 12.11.2026) ---
+http://127.0.0.1:1200/telegram/channel/x5_tech tg company=X5
+http://127.0.0.1:1200/telegram/channel/generationx5 tg company=X5
+http://127.0.0.1:1200/telegram/channel/ozon_tech tg company=Ozon
+http://127.0.0.1:1200/telegram/channel/ozoncamp tg company=Ozon
+http://127.0.0.1:1200/telegram/channel/vkjobs tg company=VK
+http://127.0.0.1:1200/telegram/channel/avitotech tg company=Авито
+http://127.0.0.1:1200/telegram/channel/avito_career tg company=Авито
+http://127.0.0.1:1200/telegram/channel/tbank_education tg company=Т-Банк
+
+# --- агрегаторы, где в постах пишут контакт рекрутера ---
+http://127.0.0.1:1200/telegram/channel/job_analyst_datascience tg
+http://127.0.0.1:1200/telegram/channel/data_hr tg
+# замер 12.11: доля постов с контактом человека / по DS-аналитике из 20
+http://127.0.0.1:1200/telegram/channel/product_analyst_vakansii tg
+http://127.0.0.1:1200/telegram/channel/it_vakansii_jobs tg
+
+# --- Habr Career: стажёры и джуны (qid=1 Intern, qid=3 Junior) ---
+https://career.habr.com/vacancies/rss?qid=1&type=all career
+https://career.habr.com/vacancies/rss?qid=3&type=all career
+
+# --- блоги компаний на Habr: авторы статей по данным/ML = инженеры и лиды команд ---
+https://habr.com/ru/rss/companies/x5tech/articles/?fl=ru habr company=X5
+https://habr.com/ru/rss/companies/sberbank/articles/?fl=ru habr company=Сбер
+https://habr.com/ru/rss/companies/sberdevices/articles/?fl=ru habr company=Сбер
+https://habr.com/ru/rss/companies/ozontech/articles/?fl=ru habr company=Ozon
+https://habr.com/ru/rss/companies/vk/articles/?fl=ru habr company=VK
+https://habr.com/ru/rss/companies/avito/articles/?fl=ru habr company=Авито
+https://habr.com/ru/rss/companies/tbank/articles/?fl=ru habr company=Т-Банк
+https://habr.com/ru/rss/companies/yandex/articles/?fl=ru habr company=Яндекс
+https://habr.com/ru/rss/companies/ru_mts/articles/?fl=ru habr company=МТС
+https://habr.com/ru/rss/companies/psb/articles/?fl=ru habr company=ПСБ
+https://habr.com/ru/rss/companies/alfa/articles/?fl=ru habr company=Альфа-Банк

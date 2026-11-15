@@ -66,9 +66,13 @@ if [ -n "$TG" ]; then
     # команды в боте: /contact Компания; Имя; @ник|email; … и /contact_log @ник написал|ответил …
     "$TG" action add contact --desc "добавить контакт: Компания; Имя; @ник|email; [роль]; [URL]" --hint "Acme; Анна Иванова; @anna_hr; рекрутер; https://t.me/…" -- "$PY" -I "$C/contacts.py" quick -- {arg} >/dev/null
     "$TG" action add contact_log --desc "отметить контакт: @ник написал|ответил|отказ [заметка]" --hint "@anna_hr написал пинг по вакансии" -- "$PY" -I "$C/contacts.py" quicklog -- {arg} >/dev/null
-    EXEC_DUE="ExecStartPost=-/bin/sh $C/due-tg.sh"
+    "$TG" action add scout-add  -- "$PY" -I "$C/scout.py" add {arg} >/dev/null
+    "$TG" action add scout-skip -- "$PY" -I "$C/scout.py" skip {arg} >/dev/null
+    # scout после дайджеста (его items.db уже свежая), до due: сначала новые люди, потом кому пора писать
+    EXEC_DUE="ExecStartPost=-/usr/bin/fish -c 'exec /usr/bin/env python3 -I $C/scout.py run'
+ExecStartPost=-/bin/sh $C/due-tg.sh"
   fi
-  echo "OK: Telegram через $TG (actions: digest-queue/-skip/-bl, contacts-log/-replied)"
+  echo "OK: Telegram через $TG (actions: digest-queue/-skip/-bl, contacts-log/-replied, scout-add/-skip)"
 fi
 
 mkdir -p "$UNIT_DIR"
