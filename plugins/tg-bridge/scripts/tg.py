@@ -161,7 +161,7 @@ def create_topic(api, name, **info):
     return r["message_thread_id"]
 
 
-CONTROL_NAME = "🎛 Пульт"
+CONTROL_NAME = "Пульт"
 
 
 def control_thread(api):
@@ -680,7 +680,8 @@ def command_in(api, me, msg, text):
                 write_atomic(d("cmdreply", f"{m['message_id']}.json"), json.dumps({"action": name, "created": time.time()}))
             return f"cmd:{name}?"
         code, out = run_action(name, rest if takes_arg else "", thread=msg_thread(msg))
-        say((out or "пусто")[-3500:] if code == 0 else f"{name}: ошибка, код {code}\n{out[-800:]}")
+        if code or (out or "").strip():                         # пустой вывод: команда ответила сама (tg send)
+            say(out[-3500:] if code == 0 else f"{name}: ошибка, код {code}\n{out[-800:]}")
     else:
         say(f"Нет команды /{name}. /help")
     return f"cmd:{name}"

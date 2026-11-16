@@ -140,8 +140,7 @@ def decide():
 
 
 def fmt(items):
-    mark = {"closed": "✖", "queue": "✖", "other": "✖", "unknown": "?", "open": "·", "running": "▶"}
-    return "\n".join(f"{mark[i['verdict']]} {i['name'][:60]} — {i['why']}" for i in items)
+    return "\n".join(f"{i['name'][:60]} — {i['why']}" for i in items)
 
 
 def cmd_list(a):

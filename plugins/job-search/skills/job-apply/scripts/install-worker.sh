@@ -75,9 +75,9 @@ EOF
 TG=$(command -v tg || { [ -x "$HOME/.local/bin/tg" ] && echo "$HOME/.local/bin/tg"; } || true)
 if [ -n "$TG" ]; then
   PY=$(command -v python3)
-  "$TG" action add queue --desc "очередь автооткликов: что ждёт, что упало и почему" -- "$PY" -I "$HERE/board.py" queue >/dev/null
+  "$TG" action add queue --desc "очередь автооткликов: что ждёт, что упало и почему" -- "$PY" -I "$HERE/board.py" queue --tg >/dev/null
   "$TG" action add tracker --desc "трекер: открытые отклики карточками, у кого пора делать шаг" -- "$PY" -I "$HERE/board.py" tracker --tg >/dev/null
-  "$TG" action add contacts --desc "контакты рекрутеров: кому писал, кто ответил" -- "$PY" -I "$HERE/board.py" contacts >/dev/null
+  "$TG" action add contacts --desc "контакты рекрутеров: кому писал, кто ответил" -- "$PY" -I "$HERE/board.py" contacts --tg >/dev/null
   "$TG" action add cleanup --desc "удалить все вкладки, кроме открытых в трекере (сначала покажет список)" -- "$PY" -I "$HERE/topics.py" cleanup >/dev/null
   "$TG" action add topics-clean -- "$PY" -I "$HERE/topics.py" clean-go {arg} >/dev/null
 fi
