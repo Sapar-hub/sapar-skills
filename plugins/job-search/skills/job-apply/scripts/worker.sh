@@ -74,7 +74,7 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
       --add-dir "$H" --add-dir "$CONF" 2>&1 </dev/null \
       | "$TG" progress --title "$title" --log "$log" --session-file "$SESS" >"$out"
   fi
-  rm -f "$H/runs/$JOB_APPLY_RUN"
+  rm -f "$H/runs/$JOB_APPLY_RUN" "$H/runs/$JOB_APPLY_RUN.failed-urls"
   [ "$(cat "$H/browser.owner" 2>/dev/null)" = "$JOB_APPLY_RUN" ] && rm -f "$H/browser.owner"
   line=$(grep -E '^STATUS: (done|skipped|paused|failed|manual|bl-done)' "$out" | tail -1)
   status=$(printf '%s' "$line" | awk '{print $2}')

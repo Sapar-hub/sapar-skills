@@ -222,7 +222,18 @@ const cmds = {
     console.log('OK: закрыт');
   },
   async goto([url], { page }) {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    // один и тот же адрес в прогоне не ждём дважды: второй сбой подряд — сразу стоп (раньше исполнитель
+    // мог 6 раз по минуте ждать недоступную страницу)
+    const run = process.env.JOB_APPLY_RUN;                          // ручной запуск — без памяти сбоев
+    const memo = run ? join(HOME, 'runs', `${run}.failed-urls`) : null;
+    const failed = memo && existsSync(memo) ? readFileSync(memo, 'utf8').split('\n') : [];
+    if (failed.filter((u) => u === url).length >= 2) die(`адрес уже дважды не открылся в этом прогоне — не пробуй снова: ${url}`);
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    } catch (e) {
+      if (memo) { mkdirSync(join(HOME, 'runs'), { recursive: true }); writeFileSync(memo, failed.concat(url).join('\n')); }
+      throw e;
+    }
     await settle(page);
     console.log(`OK: ${await page.title()} — ${page.url()}`);
   },
