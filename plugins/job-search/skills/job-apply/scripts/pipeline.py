@@ -14,8 +14,9 @@
   6. отправка   — КОД, не модель: кнопка отправки из снимка формы, click --token, проверка «спасибо/отправлено»
   7. учёт       — applied.tsv, job_tracker (tracker.py: web app или outbox)
 Итог в stdout последней строкой: STATUS: done|skipped|paused|failed|manual — … (как у старого worker'а).
-manual — анкета длиннее JOB_APPLY_AUTO_MAX_FIELDS (10) полей или заполнение не сошлось с планом: значения из плана
-  уходят пользователю (manual.md + TG), он заполняет руками; очередь не останавливается. Правил под отдельные сайты не пишем.
+manual — заполнение не сошлось с планом за 2 раунда: значения из плана уходят пользователю (manual.md + TG),
+  очередь не останавливается. Рецепты сайтов (устройство формы, общее для сайта): references/sites/<хост>.md
+  + $JOB_APPLY_HOME/sites/<хост>.md (NOTE-строки исполнителя из удачных заполнений) — в промптах плана и заполнения.
 
 Окружение: JOB_APPLY_RUN и TG_THREAD ставит worker.sh. Исполнитель: OpenCode с изолированным конфигом
 ~/.config/job-apply/opencode-executor (allowlist), из чистой папки в /tmp, с таймаутом и одним повтором.
@@ -211,13 +212,42 @@ FILL = """Ты исполнитель. ЗАПОЛНИ открытую форм�
 Правила: значения только из плана, дословно. В поле — только значение из плана: не вводи пробные/тестовые значения.
 Если маска съедает ввод через fill --type — один раз попробуй обычный fill. Обязательное поле, которого нет в плане,
 или поле плана, которого нет на странице, — НЕ заполняй догадкой, остановись.
-{extra}После заполнения сделай snap и сверь значения.
-Последняя строка: FILL: ok   или   FILL: mismatch — <какое поле и почему>"""
+{recipe}{extra}После заполнения сделай snap и сверь значения.
+Если узнал о форме неочевидное и общее для этого сайта (каким вызовом выбирается список, какое поле появляется после
+выбора, как вводится дата/телефон) — в последнем сообщении перед строкой FILL напиши это строками «NOTE: …»
+(без личных данных, только устройство формы). Последняя строка: FILL: ok   или   FILL: mismatch — <какое поле и почему>"""
 
 
-# Длинные/непонятные анкеты агент не дожимает: десятки кастомных списков и масок жгут токены, а правила под каждый
-# сайт не пишем. Порог по числу полей плана; несошедшееся с первого раза заполнение — туда же.
-MAX_AUTO_FIELDS = int(os.environ.get("JOB_APPLY_AUTO_MAX_FIELDS", "10"))
+# Рецепты сайтов: устройство формы, общее для всех вакансий одного сайта (VK, Сбер, Ozon… — шаблонные).
+# references/sites/<хост>.md — проверенные, в репо; $JOB_APPLY_HOME/sites/<хост>.md — NOTE-строки исполнителя
+# из удачных заполнений. Оба идут в промпты плана и заполнения. Правил под отдельные вакансии не пишем.
+SITES = [SKILL / "references" / "sites", HOME / "sites"]
+
+
+def host_of(url):
+    from urllib.parse import urlparse
+    return (urlparse(url or "").hostname or "").removeprefix("www.")
+
+
+def recipe(url):
+    h = host_of(url)
+    parts = [f.read_text(encoding="utf-8").strip() for d in SITES if h and (f := d / f"{h}.md").exists()]
+    return "\n\n".join(p for p in parts if p)
+
+
+def learn(url, out):
+    """NOTE-строки исполнителя -> $JOB_APPLY_HOME/sites/<хост>.md (без дублей и без похожего на личные данные)."""
+    h = host_of(url)
+    notes = [n.strip() for n in re.findall(r"^NOTE:\s*(.+)$", out or "", re.M)]
+    notes = [n for n in notes if "@" not in n and not re.search(r"\d{7,}|\+7", n)]
+    if not h or not notes:
+        return
+    f = HOME / "sites" / f"{h}.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    have = f.read_text(encoding="utf-8") if f.exists() else f"# {h} — заметки исполнителя (из удачных заполнений)\n"
+    new = [n for n in notes if n not in have]
+    if new:
+        f.write_text(have.rstrip("\n") + "\n" + "".join(f"- {n}\n" for n in new), encoding="utf-8")
 
 
 def handoff(appdir, why):
@@ -275,7 +305,9 @@ def run(key):
 
     # 2. план (Claude)
     st.step("план и резюме")
-    out = planner(PLAN.format(appdir=appdir, H=HERE, today=today, feed=q["feed"]), appdir, logs / "2-plan.json")
+    rec = recipe(url)
+    rec_txt = f"\nРецепт сайта {host_of(url)} (с прошлых откликов — значения полей бери в его формате):\n{rec}\n" if rec else ""
+    out = planner(PLAN.format(appdir=appdir, H=HERE, today=today, feed=q["feed"]) + rec_txt, appdir, logs / "2-plan.json")
     p = last_line(out, "PLAN")
     if p.startswith("skip"):
         st.step("план и резюме", p)
@@ -284,23 +316,22 @@ def run(key):
         st.step("план и резюме", "ошибка")
         return "failed", f"план: {out[-200:]}"
     st.step("план и резюме", "готово")
-    nfields = len(json.loads((appdir / "fill-plan.json").read_text(encoding="utf-8")).get("fields", []))
-    if nfields > MAX_AUTO_FIELDS:
-        st.step("заполнение", f"{nfields} полей — отдаю тебе")
-        return handoff(appdir, f"длинная анкета: {nfields} полей > {MAX_AUTO_FIELDS}")
 
     # 3–5. заполнение → проверка → гейт (с правками пользователя по кругу)
     extra = ""
     for round_ in range(1, 4):
         st.step("заполнение")
-        out = executor(FILL.format(B=B, appdir=appdir, extra=extra), logs / f"3-fill-{round_}")
+        out = executor(FILL.format(B=B, appdir=appdir, extra=extra, recipe=rec_txt.lstrip("\n")), logs / f"3-fill-{round_}")
         f = last_line(out, "FILL")
         st.step("заполнение", "готово" if f.startswith("ok") else (f or "нет ответа"))
         v = sh([sys.executable, "-I", str(HERE / "verify.py"), str(appdir)])
         st.step("проверка формы", "совпадает с планом" if v.returncode == 0 else "расхождение")
         if v.returncode:
-            # второй раунд того же заполнения обычно буксует там же — дешевле отдать человеку
+            if round_ < 2:
+                extra = f"Прошлая попытка не совпала с планом:\n{v.stdout}\nИсправь именно это.\n"
+                continue
             return handoff(appdir, f"заполнение не сошлось с планом: {v.stdout.strip()[:200]}")
+        learn(url, out)
         st.step("подтверждение", "жду тебя в чате")
         g = sh([sys.executable, "-I", str(HERE / "gate.py"), str(appdir)])
         if g.returncode == 0:

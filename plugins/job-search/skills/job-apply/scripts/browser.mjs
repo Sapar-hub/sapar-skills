@@ -295,7 +295,10 @@ const cmds = {
     const id = await input.getAttribute('id');
     const opts = page.locator(`.ant-select-dropdown:has([id="${id}_list"]) .ant-select-item-option`);
     await opts.first().waitFor({ timeout: 10000 });
-    const exact = opts.filter({ has: page.locator(`xpath=self::*[@title=${JSON.stringify(text)}]`) });
+    // точный пункт — по title или по тексту целиком («Москва», а не «Москва (деревня)» / «Новая Москва»)
+    const esc = text.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let exact = opts.filter({ has: page.locator(`xpath=self::*[@title=${JSON.stringify(text)}]`) });
+    if (!(await exact.count())) exact = opts.filter({ hasText: new RegExp(`^\\s*${esc}\\s*$`, 'i') });
     const pickIt = (await exact.count()) ? exact.first() : opts.filter({ hasText: text }).first();
     if (!(await pickIt.count())) die(`нет пункта «${text}»; есть: ${(await opts.allInnerTexts()).slice(0, 15).join(' | ')}`);
     await pickIt.click();
