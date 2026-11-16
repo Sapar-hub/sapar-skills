@@ -57,8 +57,9 @@ tg whoami
 With `~/.config/tg-bridge/agent.json` present, the user's own text in the bot chat becomes a task. Forwards, files
 and photos stay as inbox data, and they also queue a «continue» task 15 s later (text written in that window replaces it).
 The bot has Threaded Mode on, and **one tab (topic) is one task with its own session**:
-- Text in the general chat → `agent.py` opens a new tab named after the task (`createForumTopic`) and starts a fresh
-  session there. Forwards sent to the general chat move into that tab.
+- Text in the general chat → one shared session answered right there (`sessions/general`), tasks run one at a time;
+  no new tab. `/new <task>` opens a separate tab with a fresh session. `/reset` forgets the session of the current
+  chat or tab. `"general": "tabs"` in agent.json restores the old behaviour (every general-chat task gets its own tab).
 - Text or forwards inside a tab → that tab's session continues (`sessions/<thread>`, `--resume`, the tab's `cwd` from `threads.json`).
 - Each job-apply worker run gets its own tab (`tg topic … --kind apply:<key>`). The user can keep talking in it afterwards.
 - `TG_THREAD` in the environment routes `send`/`ask`/`edit`/`progress` into the tab, and makes `inbox` return that tab's items only
@@ -67,8 +68,9 @@ The bot has Threaded Mode on, and **one tab (topic) is one task with its own ses
 Up to `parallel` tasks (default 3) run at once, one per tab, and a tab's tasks keep their order. The browser is the only
 shared resource. The first `browser.mjs`/`hh.mjs`/`relay.mjs` call of a run takes it (`JOB_APPLY_RUN` + job-apply
 `scripts/lock.mjs`), others wait up to 30 min, and it is released when the run ends. Tasks without the browser never wait.
-`/stop` inside a tab stops that tab's task, and in the general chat it stops all of them. `/status` shows who holds the browser. Commands: `/status`, `/stop`, `/inbox`, plus any
-registered action without `{arg}` as `/<name>`. Rules for a run: [references/remote.md](references/remote.md). The runner is a child of
+`/stop` inside a tab stops that tab's task, and in the general chat it stops all of them. `/status` shows who holds the browser. Commands: `/help`, `/new`, `/reset`, `/status`, `/stop`, `/inbox`, plus any
+registered action as `/<name>` (with `{arg}` it takes the text after the command). An action started by a command or a
+button gets `TG_THREAD` of that chat or tab, so its own `tg send` replies in the same place. Rules for a run: [references/remote.md](references/remote.md). The runner is a child of
 the daemon, so restarting `tg-bridge` aborts a running task.
 
 ## Setup and debug

@@ -266,13 +266,16 @@ def load_command_desc():
     return {k: v.get("desc", "") for k, v in load_command_meta().items() if v.get("desc")}
 
 
-def run_action(name, arg):
+def run_action(name, arg, thread=None):
+    """thread: вкладка, откуда пришла команда/кнопка — идёт в TG_THREAD, и `tg send` из action отвечает туда же,
+    а не в общий чат."""
     argv = load_actions().get(name)
     if not argv:
         return 127, f"нет action «{name}»"
     argv = [x.replace("{arg}", arg) for x in argv]            # подстановка поэлементно: arg — один argv, без shell
+    env = {**os.environ, "TG_THREAD": str(thread) if thread else ""}
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, env=env)
         return r.returncode, (r.stdout + r.stderr).strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         return 126, str(e)
@@ -357,8 +360,8 @@ def route(api, upd):
                 api.call("answerCallbackQuery", callback_query_id=cq["id"], text="уже сделано")
                 return "a:stale"
             btn = json.loads(f.read_text())
-            code, out = run_action(btn["action"], btn["arg"])
             m = cq["message"]
+            code, out = run_action(btn["action"], btn["arg"], thread=msg_thread(m))
             api.call("answerCallbackQuery", callback_query_id=cq["id"],
                      text=f"{btn['label']}: {'ок' if code == 0 else 'ошибка'}")
             if code == 0:
@@ -409,7 +412,7 @@ def route(api, upd):
         # так что можно ответить на неё несколько раз (несколько контактов подряд)
         name = pending_name
         if name in load_actions():
-            code, out = run_action(name, text)
+            code, out = run_action(name, text, thread=thread)
             api.call("sendMessage", chat_id=me, text=(out or "пусто")[-3500:] if code == 0
                      else f"{name}: ошибка, код {code}\n{out[-800:]}", message_thread_id=thread,
                      reply_parameters={"message_id": msg["message_id"]}, link_preview_options={"is_disabled": True})
@@ -442,7 +445,7 @@ HELP = """Одна вкладка = одна задача со своим кон
 /status — что идёт и что в очереди
 /stop — прервать текущий прогон
 /inbox — непрочитанное"""
-COMMANDS = [("help", "все команды с примерами"), ("status", "что идёт и что в очереди"), ("stop", "прервать прогон"),
+COMMANDS = [("help", "все команды с примерами"), ("new", "задача в отдельной вкладке: /new текст"), ("reset", "забыть контекст этого чата/вкладки"), ("status", "что идёт и что в очереди"), ("stop", "прервать прогон"),
             ("inbox", "непрочитанное")]
 
 
@@ -493,9 +496,9 @@ def enqueue_forward(msg, thread=None):
     start_runner()
 
 
-def enqueue_task(api, me, msg, text, thread=None):
+def enqueue_task(api, me, msg, text, thread=None, new_tab=False):
     task = {"text": text, "message_id": msg["message_id"], "thread": thread, "date": msg.get("date"),
-            "created": time.time()}
+            "created": time.time(), **({"new_tab": True} if new_tab else {})}
     write_atomic(d("tasks", f"{time.time():.6f}-{msg['message_id']}.json"), json.dumps(task, ensure_ascii=False))
     react(api, me, msg["message_id"], "👀")
     run = running()
@@ -520,8 +523,20 @@ def command(api, me, msg, text):
             + "\n\nКоманда с аргументами без текста (например /contact) пришлёт пример — ответь на него реплаем.")
     elif name == "inbox":
         say(inbox_summary())
+    elif name == "reset":
+        here = msg_thread(msg)
+        f = DATA / "sessions" / str(here or "general")
+        existed = f.exists()
+        f.unlink(missing_ok=True) if f.is_file() else shutil.rmtree(f, ignore_errors=True)
+        say(("Контекст сброшен: следующее сообщение начнёт новую сессию " + ("этой вкладки." if here else "общего чата."))
+            if existed else "Здесь сессии ещё не было.")
     elif name == "new":
-        say("Новая задача — просто напиши её в общем чате: бот откроет для неё новую вкладку.")
+        rest = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+        if not rest:
+            say("/new <задача> — отдельная вкладка под задачу. Без /new сообщения в общем чате идут в одну общую "
+                "сессию (agent.json \"general\": \"single\"), а внутри вкладки — в её сессию.")
+        else:
+            enqueue_task(api, me, msg, rest, thread=None, new_tab=True)
     elif name == "stop":
         import signal
         here = msg_thread(msg)
@@ -553,7 +568,7 @@ def command(api, me, msg, text):
         takes_arg = any("{arg}" in x for x in load_actions()[name])
         if takes_arg and not rest:
             # без текста: формат от самого скрипта + поле ввода с подсказкой; реплай на это сообщение = аргумент
-            code, out = run_action(name, "help")
+            code, out = run_action(name, "help", thread=msg_thread(msg))
             hint = load_command_meta().get(name, {}).get("hint", "")
             m = api.call("sendMessage", chat_id=me, message_thread_id=msg_thread(msg),
                          text=((out or f"/{name}: напиши аргумент") + "\n\nОтветь на это сообщение — уйдёт в /" + name + " (реплаями 30 мин, можно несколько)")[-3500:],
@@ -562,7 +577,7 @@ def command(api, me, msg, text):
             if isinstance(m, dict) and m.get("message_id"):
                 write_atomic(d("cmdreply", f"{m['message_id']}.json"), json.dumps({"action": name, "created": time.time()}))
             return f"cmd:{name}?"
-        code, out = run_action(name, rest if takes_arg else "")
+        code, out = run_action(name, rest if takes_arg else "", thread=msg_thread(msg))
         say((out or "пусто")[-3500:] if code == 0 else f"{name}: ошибка, код {code}\n{out[-800:]}")
     else:
         say(f"Нет команды /{name}. /help")
@@ -773,7 +788,7 @@ def cmd_topic(a):
                 api.call("deleteForumTopic", chat_id=chat_id(), message_thread_id=int(tid))
                 print(f"удалена {tid} «{t.get(str(tid), {}).get('name', '')}»")
             except Exception as e:                                 # уже удалена руками — запись всё равно чистим
-                if "not found" not in str(e).lower() and "thread_not_found" not in str(e).lower():
+                if not re.search(r"not found|thread_not_found|topic_id_invalid", str(e), re.I):
                     print(f"ERR {tid}: {e}", file=sys.stderr)
                     rc = 1
                     continue

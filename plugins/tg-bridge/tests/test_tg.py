@@ -205,14 +205,39 @@ class Parallel(Agent):
         path, t = a.pick(tdir, set())
         self.assertEqual(t["text"], "во вкладке 77")      # порядок внутри вкладки сохраняется
 
-    def test_new_tasks_from_general_run_in_parallel(self):
+    def test_general_chat_is_one_session_by_default(self):
+        self.tg.route(self.api, msg(42, "задача 1", mid=30))
+        self.tg.route(self.api, msg(42, "задача 2", mid=31))
+        a, tdir = self.agent(), self.tg.DATA / "tasks"
+        p1, t1 = a.pick(tdir, set())
+        self.assertEqual(a.tab_key(t1, p1), "general")
+        self.assertIsNone(a.open_tab(t1))                  # без новой вкладки: ответ в общем чате
+        self.assertIsNone(a.pick(tdir, {"general"}))        # вторая ждёт первую: одна сессия, по очереди
+
+    def test_new_command_opens_tab(self):
+        self.tg.route(self.api, msg(42, "/new разобрать оффер", mid=32))
+        a, tdir = self.agent(), self.tg.DATA / "tasks"
+        p, t = a.pick(tdir, {"general"})                    # общий чат занят, а /new идёт своей вкладкой
+        self.assertTrue(t.get("new_tab"))
+        self.assertEqual(t["text"], "разобрать оффер")
+        self.assertTrue(a.tab_key(t, p).startswith("new:"))
+
+    def test_tabs_mode_runs_general_tasks_in_parallel(self):
+        (self.tg.CONF / "agent.json").write_text(json.dumps({"claude": "/bin/true", "general": "tabs"}))
         self.tg.route(self.api, msg(42, "задача 1", mid=30))
         self.tg.route(self.api, msg(42, "задача 2", mid=31))
         a, tdir = self.agent(), self.tg.DATA / "tasks"
         p1, t1 = a.pick(tdir, set())
         busy = {a.tab_key(t1, p1)}
-        p2, t2 = a.pick(tdir, busy)                         # у каждой задачи из общего чата — своя будущая вкладка
+        p2, t2 = a.pick(tdir, busy)                         # "tabs": у каждой задачи общего чата — своя вкладка
         self.assertNotEqual(p1, p2)
+
+    def test_action_gets_thread_of_command(self):
+        import sys as _s
+        (self.tg.CONF / "actions.json").write_text(json.dumps(
+            {"where": [_s.executable, "-c", "import os; print(os.environ.get('TG_THREAD', ''))"]}))
+        self.assertEqual(self.tg.run_action("where", "", thread=77), (0, "77"))
+        self.assertEqual(self.tg.run_action("where", ""), (0, ""))
 
 
 if __name__ == "__main__":

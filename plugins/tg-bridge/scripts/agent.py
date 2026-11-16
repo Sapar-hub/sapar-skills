@@ -10,11 +10,13 @@
     "add_dirs": ["/home/u/.local/share/job-apply"],
     "env_file": "/home/u/.config/job-apply/worker.env",   # прокси и пр. (у демона под systemd их нет)
     "runs_dir": "/home/u/.local/share/job-apply/runs",    # регистрация прогона для лока браузера (job-apply lock.mjs)
-    "permission_mode": "acceptEdits"
-  }
+    "permission_mode": "acceptEdits",
+    "general": "single"                                  # "single" (по умолчанию): общий чат = одна сессия, без
+  }                                                      #   новых вкладок; "tabs": каждая задача общего чата — вкладка
 Очередь: ~/.local/share/tg-bridge/tasks/*.json. Идут сейчас: running/*.json (для /status и /stop).
-Вкладки (Threaded Mode): задача из общего чата получает новую вкладку и новую сессию; задача внутри вкладки продолжает
-её сессию (sessions/<thread>, cwd вкладки из threads.json). Две задачи одной вкладки параллельно не идут.
+Вкладки (Threaded Mode): задача внутри вкладки продолжает её сессию (sessions/<thread>, cwd из threads.json).
+Общий чат: при "general": "single" все его задачи — одна сессия (sessions/general) прямо в общем чате, по очереди;
+новая вкладка — только по /new <задача> (task.new_tab). Две задачи одной вкладки параллельно не идут.
 Браузер — не здесь: его берёт лениво первый же вызов browser.mjs/hh.mjs прогона (JOB_APPLY_RUN), остальные ждут.
 """
 import atexit, json, os, secrets, shutil, signal, subprocess, sys, threading, time
@@ -45,8 +47,19 @@ def load_env(path):
     return env
 
 
+def general_single():
+    try:
+        return json.loads((CONF / "agent.json").read_text()).get("general", "single") != "tabs"
+    except (OSError, json.JSONDecodeError):
+        return True
+
+
 def tab_key(task, path):
-    return str(task.get("thread") or f"new:{path.name}")         # новая задача из общего чата — своя будущая вкладка
+    if task.get("thread"):
+        return str(task["thread"])
+    if not task.get("new_tab") and general_single():
+        return "general"                                           # общий чат — одна сессия, задачи по очереди
+    return f"new:{path.name}"                                      # /new — своя будущая вкладка
 
 
 def pick(tdir, busy):
@@ -84,6 +97,8 @@ def open_tab(task):
     """Задача из общего чата → новая вкладка; пересланное туда из общего чата переезжает вместе с ней."""
     if task.get("thread"):
         return task["thread"]
+    if not task.get("new_tab") and general_single():
+        return None                                                # отвечаем в общем чате, сессия sessions/general
     name = task.get("title") or " ".join(task["text"].split())[:60]
     if task.get("kind") == "forward":
         fwd = [json.loads(f.read_text()) for f in sorted((DATA / "inbox").glob("*.json"))]
