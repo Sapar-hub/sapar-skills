@@ -66,7 +66,9 @@ def cmd_scan(a):
         if not company or not title or not re.match(r"\d{4}-\d{2}-\d{2}", v[2]) or status in ("", "Закрыто", "—") \
                 or "hh.ru" in url:                                 # без даты отклика — не отклик (служебные строки)
             continue
-        if re.search(r"hh\.ru|\(hh\)", notes) or f"{company}\t{title}" in hh_lines and "(hh)" in hh_lines:
+        # уже на hh: ссылка на вакансию hh в заметках или «отклик на/через hh», или строка «(hh)» в applied.tsv
+        if re.search(r"hh\.ru/vacancy|отклик\w*\s+(на|через)\s+hh|через\s+hh|\(hh\)", notes, re.I) \
+                or any(company in l and title[:30] in l and "(hh)" in l for l in hh_lines.splitlines()):
             continue
         hit = hh_find(title, company)
         tag = f"#{r['row']} {company} — {title[:50]}"

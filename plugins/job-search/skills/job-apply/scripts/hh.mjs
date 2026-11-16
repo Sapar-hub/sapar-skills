@@ -200,13 +200,16 @@ async function find(title, company) {
         };
       }));
     const seen = new Set(), nc = norm(company), firstWord = nc.split(' ')[0] || '';
-    const words = norm(title).split(' ').filter((w) => w.length > 3);
+    // общие слова должности не в счёт: «Стажер (помощник HR)» ≠ «Стажер LLM-researcher»
+    const GENERIC = new Set(['стажер', 'стажёр', 'стажировка', 'junior', 'младший', 'начинающий', 'intern', 'internship',
+      'специалист', 'senior', 'middle', 'ведущий', 'старший', 'команда', 'команду', 'отдел', 'управление', 'группа']);
+    const words = norm(title).split(' ').filter((w) => w.length > 2 && !GENERIC.has(w));
     const scored = cards.filter((c) => !seen.has(c.id) && seen.add(c.id)).map((c) => {
       const ne = norm(c.employer), nt = norm(c.title);
       const emp = nc && (ne.includes(nc) || nc.includes(ne) || (firstWord.length > 2 && ne.includes(firstWord)));
       const hit = words.filter((w) => nt.includes(w)).length / Math.max(words.length, 1);
       return { ...c, score: (emp ? 1 : 0) + hit };
-    }).filter((c) => c.score >= 1.5).sort((a, b) => b.score - a.score);
+    }).filter((c) => c.score >= 1.6).sort((a, b) => b.score - a.score);   // работодатель + ≥60% слов должности
     if (!scored.length) { say('NONE'); return; }
     for (const c of scored.slice(0, 3))
       say(`${c.responded ? 'APPLIED' : 'FOUND'}\thttps://hh.ru/vacancy/${c.id}\t${c.title}\t${c.employer}\t${c.score.toFixed(2)}`);
