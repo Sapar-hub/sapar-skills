@@ -287,5 +287,22 @@ class Links(unittest.TestCase):
         self.assertEqual(self.tg.links_as_names("sendMessage", html), html)
         self.assertEqual(self.tg.links_as_names("sendMessage", {"text": "a < b"}), {"text": "a < b"})
 
+
+class Rich(unittest.TestCase):
+    class Api(FakeApi):
+        def call(self, method, files=None, **kw):
+            self.calls.append((method, kw))
+            return {"message_id": 7, "message_thread_id": 500}
+
+    def test_rich_goes_to_control_with_markdown(self):
+        tg, _ = load()
+        api = self.Api()
+        tg.CONF.mkdir(parents=True, exist_ok=True); (tg.CONF / "chat").write_text("42")
+        os.environ.pop("TG_THREAD", None)
+        self.assertEqual(tg.deliver_rich(api, "<details><summary>a</summary>b</details>"), 7)
+        m, kw = [c for c in api.calls if c[0] == "sendRichMessage"][0]
+        self.assertEqual((kw["chat_id"], kw["message_thread_id"]), (42, 500))
+        self.assertEqual(kw["rich_message"], {"markdown": "<details><summary>a</summary>b</details>"})
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,8 @@
 """tg-bridge: Telegram-бот как канал «человек в цикле» для агентов.
 
   tg daemon                                  единственный long-poll getUpdates (systemd --user)
-  tg send TEXT | --stdin [--html] [--photo F] [--doc F] [--button "label=action:arg"]... [--cols N]
+  tg send TEXT | --stdin [--html | --rich] [--photo F] [--doc F] [--button "label=action:arg"]... [--cols N]
+                                             --rich: Markdown rich message, <details><summary>…</summary>…</details>
   tg ask TEXT [--photo F] (--buttons "да,нет" | --text) [--timeout 900]
                                              ждёт ответа; stdout = ответ, exit 2 = таймаут
   tg edit MESSAGE_ID TEXT | --stdin [--html]  переписать своё сообщение (живой статус, без уведомления)
@@ -272,8 +273,30 @@ def cmd_send(a):
     flat = [r[0] for r in rows]
     cols = a.cols or (4 if all(len(b["text"]) <= 14 for b in flat) else 1)   # короткие кнопки — по 4 в ряд
     rows = [flat[i:i + cols] for i in range(0, len(flat), cols)]
+    if a.rich:
+        print(deliver_rich(Api(), text, keyboard(rows)))
+        return
     mid, _ = deliver(Api(), text, a.html, a.photo, a.doc, keyboard(rows), a.reply_to)
     print(mid)
+
+
+def deliver_rich(api, markdown, markup=None, thread=None):
+    """Rich message (Bot API 10.1, sendRichMessage): Markdown с <details><summary>…</summary>…</details> —
+    сворачиваемые блоки, заголовки, таблицы; до 32768 символов и 500 блоков. Вкладка — как у deliver."""
+    thread = thread if thread is not None else env_thread()
+    control = thread is None
+    if control:
+        thread = control_thread(api)
+    send = lambda th: api.call("sendRichMessage", chat_id=chat_id(), message_thread_id=th,
+                               rich_message={"markdown": markdown}, reply_markup=markup)["message_id"]
+    try:
+        return send(thread)
+    except RuntimeError as e:
+        if not (thread and "thread not found" in str(e).lower()):
+            raise
+        if control:
+            forget_control()
+        return send(control_thread(api))
 
 
 # --- приём (общий для daemon и ask) ---
@@ -925,6 +948,7 @@ def main():
     s.add_argument("text", nargs="?")
     s.add_argument("--stdin", action="store_true")
     s.add_argument("--html", action="store_true")
+    s.add_argument("--rich", action="store_true", help="rich message: Markdown, <details> = сворачиваемый блок")
     s.add_argument("--photo"); s.add_argument("--doc")
     s.add_argument("--button", action="append", default=[])
     s.add_argument("--cols", type=int, default=0, help="кнопок в ряду (по умолчанию: 4 коротких или 1 длинная)")

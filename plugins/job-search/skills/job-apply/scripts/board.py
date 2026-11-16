@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Сводки для команд бота: читаются с телефона, без простыней адресов и без эмодзи — только жирный/курсив.
+"""Сводки для команд бота: читаются с телефона, без простыней адресов и без эмодзи — жирный/курсив и toggle.
 
   board.py queue [--tg]      /queue    — очередь автооткликов по статусам: что ждёт и почему
   board.py tracker [--tg]    /tracker  — открытые строки job_tracker карточками (подробности свёрнуты)
   board.py contacts [--tg]   /contacts — контакты рекрутеров: кто, где, писал ли
 
---tg: HTML прямо в Telegram (`tg send --html`, в вкладку команды), режется по сообщениям под лимит.
+--tg: одним rich-сообщением в Telegram (`tg send --rich`): Markdown, каждая запись — сворачиваемый
+<details>-блок (заголовок виден, подробности по нажатию), до 32768 символов.
 Без --tg — короткий текст для консоли.
 """
-import argparse, html, re, subprocess, sys, time
+import argparse, re, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -19,11 +20,6 @@ QUEUE_ORDER = [("paused", "Ждут тебя"), ("manual", "Заполнить �
                ("new", "В очереди"), ("failed", "Ошибка"), ("bl-review", "Проверка")]
 CONTACT_STATUS = {"new": "не писал", "contacted": "писал", "replied": "ответил", "bounced": "адрес не работает",
                   "skip": "пропуск"}
-LIMIT = 3800
-
-
-def esc(s):
-    return html.escape(s or "", quote=False)
 
 
 def short(s, n):
@@ -45,25 +41,20 @@ def ddmm(d):
     return f"{d[8:10]}.{d[5:7]}" if re.match(r"\d{4}-\d{2}-\d{2}", d or "") else (d or "")
 
 
-def emit(a, pieces):
-    """pieces: HTML-куски (заголовок, блоки). --tg: склеить в сообщения ≤ LIMIT и отправить; иначе — текст."""
+def md(s):
+    """Текст из таблицы/очереди -> безопасный для Markdown (звёздочки, подчёркивания, ~ и т.п. — буквально)."""
+    return re.sub(r"([\\`*_\[\]<>|~#])", r"\\\1", re.sub(r"\s+", " ", s or "").strip())
+
+
+def emit_rich(a, text):
+    """--tg: одним rich-сообщением (toggle-блоки <details>); консоль — без разметки."""
     if not a.tg:
-        print(re.sub(r"<[^>]+>", "", "".join(pieces)).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
+        plain = re.sub(r"</?(details|summary)[^>]*>", "", text)
+        print(re.sub(r"\\(.)", r"\1", re.sub(r"[*]{1,3}|^#+ ", "", plain, flags=re.M)))
         return
-    msgs, cur = [], ""
-    for p in pieces:
-        if cur and len(cur) + len(p) > LIMIT:
-            msgs.append(cur)
-            cur = p.lstrip("\n")
-        else:
-            cur += p
-    msgs.append(cur)
-    for m in msgs:
-        r = subprocess.run(["tg", "send", "--html", "--stdin"], input=m, capture_output=True, text=True)
-        if r.returncode:
-            print(f"ERR tg send: {r.stderr.strip()[:300]}")
-            return
-    # бот не отвечает на пустой вывод команды — сводка уже отправлена
+    r = subprocess.run(["tg", "send", "--rich", "--stdin"], input=text[:32000], capture_output=True, text=True)
+    if r.returncode:
+        print(f"ERR tg send: {r.stderr.strip()[:300]}")
 
 
 # --- /queue ---
@@ -82,18 +73,22 @@ def reason(note):
 
 def cmd_queue(a):
     rows = S.read_tsv(S.HOME / "queue.tsv", header=True)
-    pieces = []
+    out = ["**Очередь автооткликов**"]
     for st, title in QUEUE_ORDER:
         items = [r for r in rows if r["status"] == st]
         if not items:
             continue
-        pieces.append(f"\n\n<b>{title}</b> ({len(items)})")
+        out.append(f"\n## {title} ({len(items)})\n")
         for r in items:
             link = r.get("href") or r.get("post") or ""
-            name = f'<a href="{esc(link)}">{esc(short(r["title"], 70))}</a>' if link.startswith("http") else esc(short(r["title"], 70))
-            why = reason(r.get("note", "")) if st != "new" else ""
-            pieces.append(f"\n<code>{r['key']}</code> {name}" + (f"\n<i>{esc(why)}</i>" if why else ""))
-    emit(a, ["<b>Очередь автооткликов</b>"] + pieces if pieces else ["Очередь пуста."])
+            name = f"[{md(short(r['title'], 80))}]({link})" if link.startswith("http") else md(short(r["title"], 80))
+            note = re.sub(r"^[\s—-]+", "", r.get("note", "") or "")
+            if st == "new" or not note:
+                out.append(f"- `{r['key']}` {name}")
+            else:                                                  # причина — свёрнута: краткая в заголовке, полная внутри
+                out.append(f"<details><summary>`{r['key']}` {name} — *{md(reason(note))}*</summary>\n\n"
+                           f"{md(re.sub(r'https?://\S+', '', note))}\n</details>\n")
+    emit_rich(a, "\n".join(out) if len(out) > 1 else "Очередь пуста.")
 
 
 # --- /tracker ---
@@ -123,19 +118,19 @@ def due(f):
 
 
 def card(r):
-    """Вакансия: заголовок строкой + сворачиваемая цитата с подробностями (tap — раскрыть)."""
+    """Вакансия — toggle: заголовок виден, подробности по нажатию."""
     v = r["values"] + [""] * 14
     company, title, date, stage, status, nxt, _, notes, url = v[:9]
-    head = f"<b>#{r['row']} {esc(company)}</b> — {esc(title)}" + (" · <b><i>пора</i></b>" if due(nxt) else "")
-    body = [f"<i>{esc(stage or 'Отклик')} {esc(ddmm(date))} · {esc(status)}</i>"]
+    head = f"**#{r['row']} {md(company)}** — {md(title)}" + (" · ***пора***" if due(nxt) else "")
+    body = [f"*{md(stage or 'Отклик')} {md(ddmm(date))} · {md(status)}*"]
     if nxt and nxt != "-":
-        body.append(f"<b>Дальше:</b> {esc(clip(nxt, 400))}")
+        body.append(f"**Дальше:** {md(nxt)}")
     if notes:
-        body.append(esc(clip(notes, 500)))
+        body.append(md(notes))
     link = next((u for u in re.split(r"\s*;\s*|\s+", url) if u.startswith("http")), "")
     if link:
-        body.append(f'<a href="{esc(link)}">вакансия</a>')
-    return head + "\n<blockquote expandable>" + "\n".join(body) + "</blockquote>"
+        body.append(f"[вакансия]({link})")
+    return f"<details><summary>{head}</summary>\n\n" + "\n\n".join(body) + "\n</details>\n"
 
 
 def cmd_tracker(a):
@@ -147,16 +142,13 @@ def cmd_tracker(a):
         groups.setdefault(r["values"][4], []).append(r)
     order = sorted(groups, key=lambda s: (0 if "ДЕЙСТВ" in s.upper() else 1 if s == "В процессе" else 2, s))
     ndue = sum(due((r["values"] + [""] * 6)[5]) for r in opened)
-    pieces = [f"<b>Трекер</b>: открыто {len(opened)}, закрыто {len(rows) - len(opened)}, "
-              f"пора действовать — {ndue}\n<i>{esc(src)}. Подробности — нажать на цитату.</i>"]
+    out = [f"**Трекер**: открыто {len(opened)}, закрыто {len(rows) - len(opened)}, пора действовать — {ndue}",
+           f"*{md(src)}*"]
     for st in order:
         items = sorted(groups[st], key=lambda r: (not due((r["values"] + [""] * 6)[5]), r["row"]))
-        pieces.append(f"\n\n<b>{esc(st)}</b> ({len(items)})")
-        pieces += ["\n" + (card(r) if a.tg else f"#{r['row']} {esc(short(r['values'][0], 28))} — "
-                                                  f"{esc(short(r['values'][1], 40))}"
-                                                  + (" · пора" if due((r['values'] + [''] * 6)[5]) else ""))
-                   for r in items]
-    emit(a, pieces)
+        out.append(f"\n## {md(st)} ({len(items)})\n")
+        out += [card(r) for r in items]
+    emit_rich(a, "\n".join(out))
 
 
 # --- /contacts ---
@@ -166,20 +158,24 @@ def cmd_contacts(a):
     import contacts as C
     rows = C.read_tsv(C.CONTACTS, C.C_FIELDS)
     if not rows:
-        emit(a, ["Контактов нет."]); return
+        emit_rich(a, "Контактов нет."); return
     by = {}
     for r in rows:
         by.setdefault(r["company"], []).append(r)
-    pieces = [f"<b>Контакты</b>: {len(rows)} в {len(by)} компаниях"]
+    out = [f"**Контакты**: {len(rows)} в {len(by)} компаниях\n"]
     for comp, people in by.items():
-        pieces.append(f"\n\n<b>{esc(comp)}</b>")
+        wrote = sum(p["status"] in ("contacted", "replied") for p in people)
+        replied = sum(p["status"] == "replied" for p in people)
+        summary = f"**{md(comp)}** — {len(people)} · *писал {wrote}, ответили {replied}*"
+        lines = []
         for r in people:
             st = CONTACT_STATUS.get(r["status"], r["status"])
             when = f" {ddmm(r['last_contact_at'])}" if r["last_contact_at"] else ""
-            src = f' · <a href="{esc(r["source_url"])}">источник</a>' if r.get("source_url", "").startswith("http") else ""
-            pieces.append(f"\n{esc(r['name'])} <i>({esc(r['role'])})</i> — <code>{esc(r['value'])}</code>"
-                          f" · <i>{esc(st)}{esc(when)}</i>{src}")
-    emit(a, pieces)
+            srcl = f" · [источник]({r['source_url']})" if r.get("source_url", "").startswith("http") else ""
+            note = f"\n  {md(r['note'])}" if r.get("note") else ""
+            lines.append(f"- **{md(r['name'])}** *({md(r['role'])})* — `{r['value']}` · *{md(st)}{when}*{srcl}{note}")
+        out.append(f"<details><summary>{summary}</summary>\n\n" + "\n".join(lines) + "\n</details>\n")
+    emit_rich(a, "\n".join(out))
 
 
 def main():
