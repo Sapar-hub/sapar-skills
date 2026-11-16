@@ -196,7 +196,11 @@ const cmds = {
     if (args.includes('--headless')) flags.push('--headless=new');
     if (args.includes('--direct')) flags.push('--no-proxy-server');
     const log = openSync(join(HOME, 'chrome.log'), 'a');
-    spawn(chromium.executablePath(), [...flags, 'about:blank'], { detached: true, stdio: ['ignore', log, log] }).unref();
+    // Свои корневые сертификаты (напр. SberCA для входа через Сбер ID) — только для этого браузера: Chromium на Linux
+    // берёт хранилище из $HOME/.pki/nssdb, поэтому при наличии HOME/chrome-home/.pki/nssdb запускаем с этим HOME.
+    const certHome = join(HOME, 'chrome-home');
+    const env = existsSync(join(certHome, '.pki', 'nssdb')) ? { ...process.env, HOME: certHome } : process.env;
+    spawn(chromium.executablePath(), [...flags, 'about:blank'], { detached: true, stdio: ['ignore', log, log], env }).unref();
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 250));
       try { await (await chromium.connectOverCDP(CDP)).close(); return console.log(`OK: браузер на ${CDP}`); } catch {}

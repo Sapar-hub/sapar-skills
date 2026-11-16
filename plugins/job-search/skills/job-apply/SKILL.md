@@ -28,6 +28,12 @@ Headless runs share this one browser. With `JOB_APPLY_RUN` set (the tg-bridge ru
 `browser.mjs`/`hh.mjs`/`relay.mjs` call takes the browser for the whole run, and other runs wait (`scripts/lock.mjs`).
 Manual use at the laptop doesn't lock.
 
+Sites signed by a non-public root (Sber ID `auth.sber.ru` → SberCA Root Ext): put the root into a private NSS db
+`~/.local/share/job-apply/chrome-home/.pki/nssdb` (`certutil -N -d sql:<db> --empty-password`, then
+`certutil -A -d sql:<db> -n '<name>' -t 'C,,' -i <root.pem>`, the root taken from the chain's AIA and checked by
+fingerprint). `start` then runs Chromium with that HOME, so only this browser trusts it, not the system.
+Sber candidates log in at privet.sber.ru (Pulse), not hr.sberbank.ru (employees, client certificates).
+
 Refs are renumbered on every `snap`. Run `snap` again after anything that re-renders the form.
 `click` errors print what covers the element (cookie banner, "download the app"
 popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
