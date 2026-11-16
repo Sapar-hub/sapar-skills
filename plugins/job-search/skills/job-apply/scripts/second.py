@@ -20,8 +20,12 @@ MARK = "второй канал hh"
 
 def hh_find(title, company):
     """-> (status, url, hh_title, employer) лучшего совпадения или None."""
-    p = subprocess.run(["node", str(HERE / "hh.mjs"), "find", "--title", title, "--company", company],
-                       capture_output=True, text=True, timeout=180)
+    try:                                     # в таймаут входит ожидание браузера (lock.mjs ждёт до 30 мин)
+        p = subprocess.run(["node", str(HERE / "hh.mjs"), "find", "--title", title, "--company", company],
+                           capture_output=True, text=True, timeout=2400)
+    except subprocess.TimeoutExpired:
+        print(f"WARN hh find «{title}»: не дождался браузера", file=sys.stderr)
+        return None
     for line in p.stdout.splitlines():
         parts = line.split("\t")
         if parts[0] in ("FOUND", "APPLIED") and len(parts) >= 4:
@@ -59,7 +63,8 @@ def cmd_scan(a):
     for r in rows:
         v = r["values"] + [""] * 14
         company, title, status, notes, url = v[0], v[1], v[4], v[7], v[8]
-        if not company or not title or status in ("", "Закрыто") or "hh.ru" in url:
+        if not company or not title or not re.match(r"\d{4}-\d{2}-\d{2}", v[2]) or status in ("", "Закрыто", "—") \
+                or "hh.ru" in url:                                 # без даты отклика — не отклик (служебные строки)
             continue
         if re.search(r"hh\.ru|\(hh\)", notes) or f"{company}\t{title}" in hh_lines and "(hh)" in hh_lines:
             continue

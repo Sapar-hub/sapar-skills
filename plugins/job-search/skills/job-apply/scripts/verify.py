@@ -46,6 +46,12 @@ def digits(s):
     return re.sub(r"\D", "", s or "")
 
 
+def same_long(got, want):
+    """snap режет значения до 100 символов: длинный текст (письмо) совпал, если показанное — его начало."""
+    g, w = norm(got).rstrip("…"), norm(want)
+    return len(g) >= 90 and w.startswith(g)
+
+
 def check(plan, items):
     problems, used = [], set()
     for f in plan.get("fields", []):
@@ -53,8 +59,10 @@ def check(plan, items):
         if "value" in f or "select" in f:
             want = str(f.get("value", f.get("select")))
             hit = [i for i in items if i["value"] is not None and (
-                norm(i["value"]) == norm(want) or (digits(want) and len(digits(want)) >= 7 and
-                                                   digits(i["value"])[-10:] == digits(want)[-10:]))]
+                norm(i["value"]) == norm(want) or same_long(i["value"], want) or
+                (digits(want) and len(digits(want)) >= 7 and digits(i["value"])[-10:] == digits(want)[-10:]))]
+            if not hit and "select" in f:            # выбор кнопкой-переключателем: в подписи кнопки — выбранный пункт
+                hit = [i for i in items if i["kind"] in ("button", "combobox") and norm(i["label"]) == norm(want)]
             if not hit:
                 problems.append(f"нет значения «{want}» ({label})")
             used.update(i["ref"] for i in hit)
