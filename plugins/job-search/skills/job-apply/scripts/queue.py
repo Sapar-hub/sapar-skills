@@ -5,6 +5,7 @@
   queue.py next                    ключ первого `new`/`bl-review` (пусто — очередь пуста)
   queue.py show <key>              строка очереди как JSON
   queue.py set <key> <status> [--note …]
+  queue.py add --key K --title T --href URL [--feed --details --post --note]   (дубли по key/href не добавляет)
       status: new | in-progress | done | skipped | paused | failed | manual | bl-review | bl-done
       manual — длинная/непонятная анкета: значения отправлены пользователю, заполняет руками
 
@@ -48,6 +49,11 @@ def main():
     sp.add_parser("next")
     sp.add_parser("show").add_argument("key")
     s = sp.add_parser("set"); s.add_argument("key"); s.add_argument("status", choices=STATUSES); s.add_argument("--note")
+    ad = sp.add_parser("add")                                       # элемент не из дайджеста (напр. hh — второй канал)
+    for k in ("key", "title", "href"):
+        ad.add_argument(f"--{k}", required=True)
+    for k in ("feed", "details", "post", "note"):
+        ad.add_argument(f"--{k}", default="")
     a = ap.parse_args()
     rows = load()
     if a.cmd == "list":
@@ -59,6 +65,15 @@ def main():
         r = next((r for r in rows if r["status"] in ("new", "bl-review")), None)
         if r:
             print(r["key"])
+    elif a.cmd == "add":
+        if any(r["key"] == a.key or (a.href and r["href"] == a.href) for r in rows):
+            print(f"{a.key}: уже в очереди")
+            return
+        import time
+        rows.append({"date": time.strftime("%Y-%m-%d"), "key": a.key, "status": "new", "feed": a.feed, "title": a.title,
+                     "href": a.href, "details": a.details, "post": a.post, "note": a.note})
+        save(rows)
+        print(f"{a.key}: new")
     elif a.cmd == "show":
         print(json.dumps(find(rows, a.key), ensure_ascii=False))
     else:

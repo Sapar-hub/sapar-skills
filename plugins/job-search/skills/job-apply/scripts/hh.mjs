@@ -5,6 +5,8 @@
 //   hh.mjs resumes                              id и названия резюме в аккаунте
 //   hh.mjs map                                  трек → id из ~/.config/job-apply/hh-resumes.json
 //   hh.mjs sync <track> <tailored.yaml> [--dry] переписать резюме трека: «Обо мне», ключевые навыки, ЗП пустая
+//   hh.mjs find --title T --company C          та же вакансия на hh: строки FOUND|APPLIED <url> <должность> <работодатель>
+//                                                <оценка> (до 3, лучшая первой) или NONE
 //
 // Что синхронизируется: per-resume поля hh — «Обо мне» (about + проекты + публикации), ключевые навыки,
 // уровень дохода (всегда пусто). Название/профессия, опыт, образование, контакты — общие в профиле hh,
@@ -177,6 +179,40 @@ async function listResumes() {
   } finally { await page.close(); await browser.close(); }
 }
 
+// --- поиск вакансии на hh по должности и компании (второй канал к отклику на сайте работодателя) ---
+const norm = (s) => clean(s).toLowerCase().replace(/[«»"'().,–—-]/g, ' ').replace(/\b(ооо|пао|ао|зао|llc|ltd|group|tech)\b/g, ' ')
+  .replace(/\s+/g, ' ').trim();
+
+async function find(title, company) {
+  const { browser, page } = await connect();
+  try {
+    const q = encodeURIComponent(`${title} ${company}`.trim());
+    await open(page, `https://hh.ru/search/vacancy?text=${q}&area=113&order_by=relevance&items_on_page=50`);
+    const cards = await page.evaluate(() => [...document.querySelectorAll('a[href*="/vacancy/"]')]
+      .filter((a) => /\/vacancy\/\d+/.test(a.href) && a.innerText.trim().length > 3)
+      .map((a) => {
+        let card = a; for (let i = 0; i < 8 && card.parentElement; i++) {
+          card = card.parentElement; if (card.querySelector('[data-qa*="employer"]')) break; }
+        return {
+          id: a.href.match(/\/vacancy\/(\d+)/)[1], title: a.innerText.trim(),
+          employer: card.querySelector('[data-qa*="employer"]')?.innerText.trim() || '',
+          responded: /Вы откликнулись|You applied|Отклик отправлен/i.test(card.innerText),
+        };
+      }));
+    const seen = new Set(), nc = norm(company), firstWord = nc.split(' ')[0] || '';
+    const words = norm(title).split(' ').filter((w) => w.length > 3);
+    const scored = cards.filter((c) => !seen.has(c.id) && seen.add(c.id)).map((c) => {
+      const ne = norm(c.employer), nt = norm(c.title);
+      const emp = nc && (ne.includes(nc) || nc.includes(ne) || (firstWord.length > 2 && ne.includes(firstWord)));
+      const hit = words.filter((w) => nt.includes(w)).length / Math.max(words.length, 1);
+      return { ...c, score: (emp ? 1 : 0) + hit };
+    }).filter((c) => c.score >= 1.5).sort((a, b) => b.score - a.score);
+    if (!scored.length) { say('NONE'); return; }
+    for (const c of scored.slice(0, 3))
+      say(`${c.responded ? 'APPLIED' : 'FOUND'}\thttps://hh.ru/vacancy/${c.id}\t${c.title}\t${c.employer}\t${c.score.toFixed(2)}`);
+  } finally { await page.close(); await browser.close(); }
+}
+
 const [cmd, ...args] = process.argv.slice(2);
 if (cmd === 'resumes') {
   await listResumes();
@@ -213,6 +249,10 @@ if (cmd === 'resumes') {
     await syncSkills(page, id, skills);
     say('OK');
   } finally { await page.close(); await browser.close(); }
+} else if (cmd === 'find') {
+  const opt = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : ''; };
+  if (!opt('--title') || !opt('--company')) die('hh.mjs find --title <должность> --company <компания>');
+  await find(opt('--title'), opt('--company'));
 } else {
-  die('команды: resumes | map | sync <track> <tailored.yaml> [--dry]');
+  die('команды: resumes | map | sync <track> <tailored.yaml> [--dry] | find --title T --company C');
 }

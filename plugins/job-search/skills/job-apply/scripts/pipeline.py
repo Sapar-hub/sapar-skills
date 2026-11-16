@@ -15,6 +15,7 @@
   5. гейт       — gate.py: скрин + PDF + значения из плана → «отправить» в Telegram → одноразовый токен
   6. отправка   — КОД, не модель: кнопка отправки из снимка формы, click --token, проверка «спасибо/отправлено»
   7. учёт       — applied.tsv, job_tracker (tracker.py: web app или outbox)
+  8. hh.ru      — после отклика на сайте: second.py after ищет ту же вакансию на hh → в очередь вторым каналом
 Итог в stdout последней строкой: STATUS: done|skipped|paused|failed|manual — … (как у старого worker'а).
 manual — заполнение не сошлось с планом за 2 раунда: значения из плана уходят пользователю (manual.md + TG),
   очередь не останавливается. Рецепты сайтов (устройство формы, общее для сайта): references/sites/<хост>.md
@@ -323,10 +324,15 @@ def run(key):
     st = ST = Status(q["title"])
     today = time.strftime("%Y-%m-%d")
 
-    # 1. разведка
+    # 1. разведка (второй канал hh — без неё: вакансия уже найдена на hh, сразу форма отклика)
     st.step("разведка")
-    out = executor(RECON.format(B=B, H=HERE, post_text=post_text(q), **q), logs / "1-recon")
-    r = last_line(out, "RECON")
+    m = re.search(r"hh\.ru/vacancy/(\d+)", q.get("href", ""))
+    if q.get("details", "").startswith("второй канал hh") and m:
+        sh(f"{B} goto https://hh.ru/applicant/vacancy_response?vacancyId={m.group(1)}")
+        out, r = "", f"hh https://hh.ru/vacancy/{m.group(1)} | {q['details'].split(':', 1)[-1].strip()}"
+    else:
+        out = executor(RECON.format(B=B, H=HERE, post_text=post_text(q), **q), logs / "1-recon")
+        r = last_line(out, "RECON")
     channel = "hh" if r.startswith("hh ") else "site"             # hh: форма отклика hh, тот же конвейер
     if not (r.startswith("ok") or channel == "hh"):
         st.step("разведка", r or "исполнитель не ответил")
@@ -440,6 +446,10 @@ def run(key):
     row = appdir / "tracker-row.json"
     t = sh([sys.executable, "-I", str(HERE / "tracker.py"), "add"], input=row.read_text()) if row.exists() else None
     st.step("трекер", (t.stdout.strip() if t else "нет строки")[:80])
+    if channel == "site":                                          # та же вакансия на hh — в очередь вторым каналом
+        st.step("hh.ru")
+        h = sh([sys.executable, "-I", str(HERE / "second.py"), "after", str(appdir), key])
+        st.step("hh.ru", (h.stdout.strip() or h.stderr.strip() or "—")[:80])
     return "done", f"{plan['company']} {plan['title']}"
 
 
