@@ -186,17 +186,19 @@ const norm = (s) => clean(s).toLowerCase().replace(/[«»"'().,–—-]/g, ' ').
 async function find(title, company) {
   const { browser, page } = await connect();
   try {
-    const q = encodeURIComponent(`${title} ${company}`.trim());
+    // должность без компании: поиск hh склеивает слова через И, компания только сужает; работодателя сверяем сами
+    const q = encodeURIComponent(clean(title).replace(/[\[\](){}«»"]/g, ' ').slice(0, 120));
     await open(page, `https://hh.ru/search/vacancy?text=${q}&area=113&order_by=relevance&items_on_page=50`);
-    const cards = await page.evaluate(() => [...document.querySelectorAll('a[href*="/vacancy/"]')]
-      .filter((a) => /\/vacancy\/\d+/.test(a.href) && a.innerText.trim().length > 3)
+    const cards = await page.evaluate(() => [...document.querySelectorAll('a[data-qa="serp-item__title"], a[data-qa*="serp-item__title"]')]
+      .filter((a) => /\/vacancy\/\d+/.test(a.href))
       .map((a) => {
-        let card = a; for (let i = 0; i < 8 && card.parentElement; i++) {
-          card = card.parentElement; if (card.querySelector('[data-qa*="employer"]')) break; }
+        let card = a; for (let i = 0; i < 10 && card.parentElement; i++) {
+          card = card.parentElement; if (card.querySelector('[data-qa="vacancy-serp__vacancy-employer-text"]')) break; }
+        const t = (sel) => (card.querySelector(sel)?.textContent || '').trim();
         return {
-          id: a.href.match(/\/vacancy\/(\d+)/)[1], title: a.innerText.trim(),
-          employer: card.querySelector('[data-qa*="employer"]')?.innerText.trim() || '',
-          responded: /Вы откликнулись|You applied|Отклик отправлен/i.test(card.innerText),
+          id: a.href.match(/\/vacancy\/(\d+)/)[1], title: (a.textContent || '').trim(),
+          employer: t('[data-qa="vacancy-serp__vacancy-employer-text"]') || t('[data-qa="vacancy-serp__vacancy-employer"]'),
+          responded: /Вы откликнулись|You applied|You have applied|Отклик отправлен/i.test(card.textContent || ''),
         };
       }));
     const seen = new Set(), nc = norm(company), firstWord = nc.split(' ')[0] || '';
@@ -209,7 +211,7 @@ async function find(title, company) {
       const emp = nc && (ne.includes(nc) || nc.includes(ne) || (firstWord.length > 2 && ne.includes(firstWord)));
       const hit = words.filter((w) => nt.includes(w)).length / Math.max(words.length, 1);
       return { ...c, score: (emp ? 1 : 0) + hit };
-    }).filter((c) => c.score >= 1.6).sort((a, b) => b.score - a.score);   // работодатель + ≥60% слов должности
+    }).filter((c) => c.score >= 1.8).sort((a, b) => b.score - a.score);   // работодатель + ≥80% слов должности
     if (!scored.length) { say('NONE'); return; }
     for (const c of scored.slice(0, 3))
       say(`${c.responded ? 'APPLIED' : 'FOUND'}\thttps://hh.ru/vacancy/${c.id}\t${c.title}\t${c.employer}\t${c.score.toFixed(2)}`);
