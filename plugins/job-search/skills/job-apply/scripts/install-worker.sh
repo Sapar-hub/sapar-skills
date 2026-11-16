@@ -75,10 +75,12 @@ EOF
 TG=$(command -v tg || { [ -x "$HOME/.local/bin/tg" ] && echo "$HOME/.local/bin/tg"; } || true)
 if [ -n "$TG" ]; then
   PY=$(command -v python3)
-  "$TG" action add queue --desc "очередь автооткликов: что ждёт, что упало и почему" -- "$PY" -I "$HERE/queue.py" list >/dev/null
+  "$TG" action add queue --desc "очередь автооткликов: что ждёт, что упало и почему" -- "$PY" -I "$HERE/board.py" queue >/dev/null
+  "$TG" action add tracker --desc "трекер: открытые отклики, у кого пора делать шаг" -- "$PY" -I "$HERE/board.py" tracker >/dev/null
+  "$TG" action add contacts --desc "контакты рекрутеров: кому писал, кто ответил" -- "$PY" -I "$HERE/board.py" contacts >/dev/null
   "$TG" action add cleanup --desc "удалить все вкладки, кроме открытых в трекере (сначала покажет список)" -- "$PY" -I "$HERE/topics.py" cleanup >/dev/null
   "$TG" action add topics-clean -- "$PY" -I "$HERE/topics.py" clean-go {arg} >/dev/null
 fi
 systemctl --user daemon-reload
 systemctl --user enable --now job-apply-worker.timer job-apply-topics.timer >/dev/null
-echo "OK: job-apply-worker.service + timer ($ONCALENDAR), job-apply-topics.timer ($TOPICS_ONCALENDAR)${TG:+, команды /queue /cleanup}"
+echo "OK: job-apply-worker.service + timer ($ONCALENDAR), job-apply-topics.timer ($TOPICS_ONCALENDAR)${TG:+, команды /queue /tracker /contacts /cleanup}"
