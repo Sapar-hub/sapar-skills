@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("JOB_APPLY_HOME", "~/.local/share/job-apply")).expanduser()
 CACHE = HOME / "sheet-cache.json"
 OPEN = {"Ожидание ответа", "В процессе"}
-QUEUE_OPEN = {"new", "running", "paused", "failed"}
+QUEUE_OPEN = {"new", "running", "manual", "paused", "failed"}
 
 
 def norm_url(u):

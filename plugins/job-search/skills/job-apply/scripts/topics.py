@@ -24,7 +24,7 @@ import status as S  # noqa: E402  (norm_url, norm_txt, read_tsv, fetch_sheet, ca
 HOME = S.HOME
 TG_DATA = Path(os.environ.get("TG_BRIDGE_DATA", "~/.local/share/tg-bridge")).expanduser()
 QUEUE_NOT_SENT = {"skipped", "bl-done"}
-QUEUE_OPEN = {"new", "running", "in-progress", "paused", "failed", "bl-review"}
+QUEUE_OPEN = {"new", "running", "manual", "in-progress", "paused", "failed", "bl-review"}
 
 
 def tg_bin():

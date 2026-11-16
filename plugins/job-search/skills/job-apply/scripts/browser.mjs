@@ -50,6 +50,8 @@ const SNAP_JS = (prefix) => {
     return clean(el.getAttribute('aria-label') ||
       (by && by.split(' ').map((id) => document.getElementById(id)?.innerText).join(' ')) ||
       (el.labels && el.labels[0]?.innerText) || el.closest('label')?.innerText ||
+      // antd / подобные: подпись поля в обёртке формы, не в <label for>
+      el.closest('.ant-form-item, [class*="form-item"], [class*="FormItem"]')?.querySelector('label, [class*="label"]')?.innerText ||
       el.getAttribute('placeholder') || el.innerText || el.value || el.getAttribute('title') ||
       el.getAttribute('name') || el.getAttribute('alt'));
   };
@@ -69,6 +71,12 @@ const SNAP_JS = (prefix) => {
     else if (['checkbox', 'radio'].includes(t) || ['checkbox', 'radio', 'switch'].includes(role))
       extra = (el.checked || el.getAttribute('aria-checked') === 'true') ? ' [x]' : ' [ ]';
     else if (['input', 'textarea'].includes(tag) && el.value) extra = ` value="${clean(el.value)}"`;
+    else if (role === 'combobox') {
+      // кастомные списки (antd, react-select): input пустой, выбранное — в соседнем элементе
+      const host = el.closest('.ant-select, [class*="select__control"], [class*="Select-control"], [class*="-container"]');
+      const picked = host?.querySelector('.ant-select-selection-item, [class*="singleValue"], [class*="single-value"]');
+      if (picked && clean(picked.innerText)) extra = ` value="${clean(picked.innerText)}"`;
+    }
     if (el.required || el.getAttribute('aria-required') === 'true') extra += ' *';
     if (tag === 'a') extra += ` -> ${el.getAttribute('href').slice(0, 80)}`;
     out.push(`${ref} ${role} "${label(el)}"${extra}`);

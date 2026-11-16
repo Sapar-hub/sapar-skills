@@ -5,7 +5,8 @@
   queue.py next                    ключ первого `new`/`bl-review` (пусто — очередь пуста)
   queue.py show <key>              строка очереди как JSON
   queue.py set <key> <status> [--note …]
-      status: new | in-progress | done | skipped | paused | failed | bl-review | bl-done
+      status: new | in-progress | done | skipped | paused | failed | manual | bl-review | bl-done
+      manual — длинная/непонятная анкета: значения отправлены пользователю, заполняет руками
 
 Файл: $JOB_APPLY_HOME/queue.tsv (date key status feed title href details post [note]).
 """
@@ -14,8 +15,8 @@ from pathlib import Path
 
 F = Path(os.environ.get("JOB_APPLY_HOME", "~/.local/share/job-apply")).expanduser() / "queue.tsv"
 FIELDS = ["date", "key", "status", "feed", "title", "href", "details", "post", "note"]
-STATUSES = ["new", "in-progress", "done", "skipped", "paused", "failed", "bl-review", "bl-done"]
-OPEN = ("new", "bl-review", "paused", "failed")
+STATUSES = ["new", "in-progress", "done", "skipped", "paused", "failed", "manual", "bl-review", "bl-done"]
+OPEN = ("new", "bl-review", "paused", "failed", "manual")
 
 
 def load():

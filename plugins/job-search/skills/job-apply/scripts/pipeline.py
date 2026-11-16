@@ -13,7 +13,9 @@
   5. гейт       — gate.py: скрин + PDF + значения из плана → «отправить» в Telegram → одноразовый токен
   6. отправка   — КОД, не модель: кнопка отправки из снимка формы, click --token, проверка «спасибо/отправлено»
   7. учёт       — applied.tsv, job_tracker (tracker.py: web app или outbox)
-Итог в stdout последней строкой: STATUS: done|skipped|paused|failed — … (как у старого worker'а).
+Итог в stdout последней строкой: STATUS: done|skipped|paused|failed|manual — … (как у старого worker'а).
+manual — анкета длиннее JOB_APPLY_AUTO_MAX_FIELDS (10) полей или заполнение не сошлось с планом: значения из плана
+  уходят пользователю (manual.md + TG), он заполняет руками; очередь не останавливается. Правил под отдельные сайты не пишем.
 
 Окружение: JOB_APPLY_RUN и TG_THREAD ставит worker.sh. Исполнитель: OpenCode с изолированным конфигом
 ~/.config/job-apply/opencode-executor (allowlist), из чистой папки в /tmp, с таймаутом и одним повтором.
@@ -213,6 +215,33 @@ FILL = """Ты исполнитель. ЗАПОЛНИ открытую форм�
 Последняя строка: FILL: ok   или   FILL: mismatch — <какое поле и почему>"""
 
 
+# Длинные/непонятные анкеты агент не дожимает: десятки кастомных списков и масок жгут токены, а правила под каждый
+# сайт не пишем. Порог по числу полей плана; несошедшееся с первого раза заполнение — туда же.
+MAX_AUTO_FIELDS = int(os.environ.get("JOB_APPLY_AUTO_MAX_FIELDS", "10"))
+
+
+def handoff(appdir, why):
+    """Готовые значения из плана -> manual.md + Telegram (текст и PDF). -> ("manual", note)."""
+    plan = json.loads((appdir / "fill-plan.json").read_text(encoding="utf-8"))
+    rows = []
+    for f in plan.get("fields", []):
+        v = f.get("value", f.get("select"))
+        if v is not None:
+            rows.append(f"{f['label']}: {v}")
+        elif "upload" in f:
+            rows.append(f"{f['label']}: файл {Path(f['upload']).name}")
+        elif f.get("check"):
+            rows.append(f"[x] {f['label']}")
+    cl = (plan.get("cover_letter") or "").strip()
+    text = (f"{plan.get('company', '?')} — {plan.get('title', '?')}\n{plan.get('url', '')}\n"
+            f"Заполнить руками ({why}).\n\n" + "\n".join(rows) + (f"\n\nСопроводительное:\n{cl}" if cl else ""))
+    (appdir / "manual.md").write_text(text + "\n", encoding="utf-8")
+    subprocess.run(["tg", "send", text[:4000]], capture_output=True)
+    if plan.get("resume_pdf") and Path(plan["resume_pdf"]).exists():
+        subprocess.run(["tg", "send", "Резюме для этого отклика", "--doc", plan["resume_pdf"]], capture_output=True)
+    return "manual", f"{why}; значения в {appdir.name}/manual.md и в TG: {plan.get('url', '')}"
+
+
 def run(key):
     q = json.loads(sh([sys.executable, "-I", str(HERE / "queue.py"), "show", key]).stdout)
     slug = re.sub(r"[^\w]+", "-", q["title"].lower())[:50].strip("-") or key
@@ -255,6 +284,10 @@ def run(key):
         st.step("план и резюме", "ошибка")
         return "failed", f"план: {out[-200:]}"
     st.step("план и резюме", "готово")
+    nfields = len(json.loads((appdir / "fill-plan.json").read_text(encoding="utf-8")).get("fields", []))
+    if nfields > MAX_AUTO_FIELDS:
+        st.step("заполнение", f"{nfields} полей — отдаю тебе")
+        return handoff(appdir, f"длинная анкета: {nfields} полей > {MAX_AUTO_FIELDS}")
 
     # 3–5. заполнение → проверка → гейт (с правками пользователя по кругу)
     extra = ""
@@ -266,10 +299,8 @@ def run(key):
         v = sh([sys.executable, "-I", str(HERE / "verify.py"), str(appdir)])
         st.step("проверка формы", "совпадает с планом" if v.returncode == 0 else "расхождение")
         if v.returncode:
-            if round_ < 2:
-                extra = f"Прошлая попытка не совпала с планом:\n{v.stdout}\nИсправь именно это.\n"
-                continue
-            return "paused", f"форма не совпала с планом: {v.stdout.strip()[:300]}"
+            # второй раунд того же заполнения обычно буксует там же — дешевле отдать человеку
+            return handoff(appdir, f"заполнение не сошлось с планом: {v.stdout.strip()[:200]}")
         st.step("подтверждение", "жду тебя в чате")
         g = sh([sys.executable, "-I", str(HERE / "gate.py"), str(appdir)])
         if g.returncode == 0:
@@ -332,7 +363,8 @@ def run(key):
 
 
 ST = None
-WORDS = {"done": "отправлено", "skipped": "пропущено", "paused": "пауза, нужен ты", "failed": "ошибка"}
+WORDS = {"done": "отправлено", "skipped": "пропущено", "paused": "пауза, нужен ты", "failed": "ошибка",
+         "manual": "заполнить руками"}
 
 
 def main():
