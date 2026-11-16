@@ -83,11 +83,8 @@ def cmd_queue(a):
             link = r.get("href") or r.get("post") or ""
             name = f"[{md(short(r['title'], 80))}]({link})" if link.startswith("http") else md(short(r["title"], 80))
             note = re.sub(r"^[\s—-]+", "", r.get("note", "") or "")
-            if st == "new" or not note:
-                out.append(f"- `{r['key']}` {name}")
-            else:                                                  # причина — свёрнута: краткая в заголовке, полная внутри
-                out.append(f"<details><summary>`{r['key']}` {name} — *{md(reason(note))}*</summary>\n\n"
-                           f"{md(re.sub(r'https?://\S+', '', note))}\n</details>\n")
+            why = f"\n  *{md(reason(note))}*" if st != "new" and note else ""
+            out.append(f"- `{r['key']}` {name}{why}")             # списком, причина курсивом под пунктом
     emit_rich(a, "\n".join(out) if len(out) > 1 else "Очередь пуста.")
 
 
