@@ -76,7 +76,7 @@ TG=$(command -v tg || { [ -x "$HOME/.local/bin/tg" ] && echo "$HOME/.local/bin/t
 if [ -n "$TG" ]; then
   PY=$(command -v python3)
   "$TG" action add queue --desc "очередь автооткликов: что ждёт, что упало и почему" -- "$PY" -I "$HERE/queue.py" list >/dev/null
-  "$TG" action add cleanup --desc "удалить вкладки закрытых вакансий (сначала покажет список)" -- "$PY" -I "$HERE/topics.py" cleanup >/dev/null
+  "$TG" action add cleanup --desc "удалить все вкладки, кроме открытых в трекере (сначала покажет список)" -- "$PY" -I "$HERE/topics.py" cleanup >/dev/null
   "$TG" action add topics-clean -- "$PY" -I "$HERE/topics.py" clean-go {arg} >/dev/null
 fi
 systemctl --user daemon-reload

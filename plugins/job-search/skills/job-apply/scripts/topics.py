@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Чистка вкладок Telegram-бота (tg-bridge, Threaded Mode) по закрытым вакансиям.
+"""Чистка вкладок Telegram-бота (tg-bridge, Threaded Mode): остаются только вакансии, открытые в трекере.
 
 Вкладка автоотклика помечена kind="apply:<ключ очереди>" (threads.json). Её судьба — по трекеру:
-  closed    строка job_tracker найдена и E = «Закрыто»                       -> удалить
-  not-sent  в трекере нет, а в очереди skipped / bl-done (отклик не подавали)  -> удалить
-  open      строка в трекере открыта, или в очереди new/running/paused/failed -> оставить
-  unknown   отклик был, но строку в трекере не сопоставить                   -> оставить, показать
+  open      строка job_tracker найдена и открыта (не «Закрыто»)                -> оставить
+  running   отклик идёт прямо сейчас (pipeline.py <ключ> жив) — вкладка нужна ему -> оставить
+  closed    строка трекера «Закрыто»                                            -> удалить
+  queue     в трекере нет: в очереди new/failed/paused/skipped/manual…            -> удалить
+            (worker откроет вкладку заново, когда возьмёт вакансию)
+  unknown   отклик был, но строку в трекере не сопоставить                      -> удалить, в списке отдельно
+  other     не автоотклик: задачи агенту, тесты; оставить, только если задача сейчас выполняется
 Строка трекера ищется по ссылке из applications/q<ключ>-*/tracker-row.json (столбец I), затем по компании
 и должности из tracker-row.json или из заметки очереди («— Компания Должность»).
 
   topics.py list               таблица вкладок и решение по каждой
-  topics.py clean [--dry-run]  удалить closed и not-sent (tg topic rm)
+  topics.py clean [--dry-run]  удалить всё, кроме open/running (tg topic rm)
   topics.py cleanup            для бота /cleanup: список + кнопка «Удалить N» (action topics-clean)
   topics.py clean-go           то, что жмёт кнопка: удалить и коротко ответить
 """
@@ -24,7 +27,7 @@ import status as S  # noqa: E402  (norm_url, norm_txt, read_tsv, fetch_sheet, ca
 HOME = S.HOME
 TG_DATA = Path(os.environ.get("TG_BRIDGE_DATA", "~/.local/share/tg-bridge")).expanduser()
 QUEUE_NOT_SENT = {"skipped", "bl-done"}
-QUEUE_OPEN = {"new", "running", "manual", "in-progress", "paused", "failed", "bl-review"}
+KEEP = ("open", "running")                                      # остальное /cleanup удаляет
 
 
 def tg_bin():
@@ -91,26 +94,42 @@ def find_row(key, q, rows):
     return None
 
 
+def running_keys():
+    p = subprocess.run(["pgrep", "-af", r"pipeline\.py [0-9]"], capture_output=True, text=True)
+    return set(re.findall(r"pipeline\.py ([0-9.]+)", p.stdout))
+
+
+def busy_threads():
+    """Вкладки, где сейчас выполняется задача агенту (tg-bridge running/<вкладка>)."""
+    d = TG_DATA / "running"
+    return {f.name.split(".")[0] for f in d.iterdir()} if d.exists() else set()
+
+
 def decide():
-    rows, queue = sheet_rows(), queue_rows()
+    rows, queue, live, busy = sheet_rows(), queue_rows(), running_keys(), busy_threads()
     th = json.loads((TG_DATA / "threads.json").read_text()) if (TG_DATA / "threads.json").exists() else {}
     out = []
     for tid, t in th.items():
         kind = t.get("kind", "")
         if not kind.startswith("apply:"):
+            verdict = "running" if tid in busy else "other"
+            out.append(dict(tid=tid, key="", name=t.get("name", ""), verdict=verdict,
+                            why=f"{kind or 'вкладка'}: " + ("задача выполняется" if tid in busy else "не вакансия")))
             continue
         key = kind.split(":", 1)[1]
         q = queue.get(key)
         r = find_row(key, q, rows)
         qs = (q or {}).get("status", "")
-        if r:
+        if key in live:
+            verdict, why = "running", "отклик идёт сейчас"
+        elif r:
             e = r["values"][4] if len(r["values"]) > 4 else ""
             verdict = "closed" if e == "Закрыто" else "open"
             why = f"трекер #{r['row']}: {e or '—'}"
+        elif qs and qs not in QUEUE_NOT_SENT | {"done"}:
+            verdict, why = "queue", f"очередь: {qs}, в трекере нет"
         elif qs in QUEUE_NOT_SENT:
-            verdict, why = "not-sent", f"очередь: {qs}, в трекере нет"
-        elif qs in QUEUE_OPEN:
-            verdict, why = "open", f"очередь: {qs}"
+            verdict, why = "queue", f"очередь: {qs}, не подавали"
         else:
             verdict, why = "unknown", f"очередь: {qs or 'нет записи'}, строка трекера не найдена"
         out.append(dict(tid=tid, key=key, name=t.get("name", ""), verdict=verdict, why=why))
@@ -118,7 +137,7 @@ def decide():
 
 
 def fmt(items):
-    mark = {"closed": "✖", "not-sent": "✖", "open": "·", "unknown": "?"}
+    mark = {"closed": "✖", "queue": "✖", "other": "✖", "unknown": "?", "open": "·", "running": "▶"}
     return "\n".join(f"{mark[i['verdict']]} {i['name'][:60]} — {i['why']}" for i in items)
 
 
@@ -136,7 +155,7 @@ def remove(items):
 
 
 def gone(items):
-    return [i for i in items if i["verdict"] in ("closed", "not-sent")]
+    return [i for i in items if i["verdict"] not in KEEP]
 
 
 def cmd_clean(a):
@@ -152,14 +171,15 @@ def cmd_clean(a):
 def cmd_cleanup(a):
     """/cleanup: показать, что удалится, и кнопку подтверждения (ничего не удаляет сам)."""
     items = decide()
-    g, keep = gone(items), [i for i in items if i["verdict"] == "unknown"]
+    g, keep = gone(items), [i for i in items if i["verdict"] in KEEP]
     if not g:
-        print("Удалять нечего: закрытых вакансий среди вкладок нет."
-              + (f"\nНе сопоставлены с трекером ({len(keep)}):\n" + fmt(keep) if keep else ""))
+        print(f"Удалять нечего: все {len(keep)} вкладок — открытые в трекере или в работе.")
         return
-    text = f"Удалю вкладки ({len(g)}) вместе с перепиской в них:\n{fmt(g)}"
-    if keep:
-        text += f"\n\nОставлю, не нашёл в трекере ({len(keep)}):\n{fmt(keep)}"
+    unk = [i for i in g if i["verdict"] == "unknown"]
+    text = f"Удалю вкладки ({len(g)}) вместе с перепиской в них:\n{fmt([i for i in g if i['verdict'] != 'unknown'])}"
+    if unk:
+        text += f"\n\nОтклик был, но в трекере строку не нашёл — тоже удалю ({len(unk)}):\n{fmt(unk)}"
+    text += f"\n\nОставлю ({len(keep)}): открытые в трекере и идущие сейчас."
     p = subprocess.run([tg_bin(), "send", text[:3900], "--button", f"Удалить {len(g)}=topics-clean:go",
                         "--cols", "1"], capture_output=True, text=True)
     print("Список и кнопка — следующим сообщением." if p.returncode == 0 else f"ERR tg send: {p.stderr.strip()}")
