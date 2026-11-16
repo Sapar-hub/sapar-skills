@@ -5,6 +5,8 @@
 
 Этапы (каждый виден строкой в одном статус-сообщении Telegram, во вкладке отклика):
   1. разведка   — исполнитель: вакансия на сайте работодателя, live/precheck, открыть форму. Итог: RECON: ok <url>
+                  Своей формы нет, есть на hh — открыть форму отклика hh: RECON: hh <url>; дальше тот же конвейер,
+                  перед заполнением hh.mjs sync переписывает резюме трека
                   код снимает vacancy.md (текст) и form-snap.txt (поля формы)
   2. план       — claude -p, без браузера: tailored-резюме (check + render), fill-plan.json, tracker-row.json,
                   при нехватке данных — tg ask. Итог: PLAN: ok | skip — причина
@@ -35,6 +37,7 @@ OPENCODE = shutil.which("opencode") or str(Path.home() / ".opencode/bin/opencode
 CLAUDE = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
 B = f"node {HERE}/browser.mjs"
 SUCCESS = re.compile(r"спасибо|отклик (отправлен|принят|получен)|мы получили|успешно|заявк[аи] (отправлен|принят)|"
+                     r"резюме доставлено|вы откликнулись|you applied|"
                      r"thank you|application (sent|received|submitted)", re.I)
 
 
@@ -170,6 +173,7 @@ RECON = """Ты исполнитель. Разведка вакансии для
   {B} goto <url> | text 8000 | snap | click <ref> | live <url> | press Enter | fill <ref> <текст>
   node {H}/precheck.mjs --company '<компания>' --title '<должность>' --url '<url>'
 Вакансия из дайджеста: «{title}» ({details}). Ссылка агрегатора: {href}. Пост: {post}.
+{post_text}
 1. Найди ЭТУ вакансию на сайте САМОГО работодателя (карьерный сайт компании; поиск на нём — через fill+press Enter).
    Агрегаторы (changellenge, youngjunior, hirify, hh) — только чтобы узнать компанию и название.
 2. {B} live <url> и precheck.
@@ -178,7 +182,9 @@ RECON = """Ты исполнитель. Разведка вакансии для
 Бюджет: не больше 30 команд. Сайт не открывается (ERR_TUNNEL/timeout) — повтори один раз, потом иди дальше.
 После 20 команд без страницы вакансии у работодателя — больше не ищи: сразу последняя строка
 RECON: not_found — <где искал> (или RECON: hh …, если нашёл на hh). Без итоговой строки разведка считается сбоем.
-Если у работодателя нет своей формы, но вакансия есть на hh.ru, — это RECON: hh, не ищи дальше.
+Если у работодателя нет своей формы, но вакансия есть на hh.ru, — не ищи дальше: live + precheck по hh-ссылке, затем
+открой форму отклика hh прямой ссылкой {B} goto https://hh.ru/applicant/vacancy_response?vacancyId=<id из ссылки>
+(кнопку «Откликнуться» не нажимай) и последняя строка RECON: hh <url вакансии на hh.ru> | <компания> | <должность>.
 Последняя строка ответа ровно одна из:
 RECON: ok <url вакансии на сайте работодателя> | <компания> | <должность>
 RECON: hh <url вакансии на hh.ru> | <компания> | <должность>
@@ -205,6 +211,17 @@ PLAN = """Скилл job-apply, этап ПЛАН конвейера (брауз
    "F": "<+3 раб. дня: что дальше>", "G": "Уточнить", "H": "<заметки>", "I": url, "J": "<папка/PDF>",
    "K": "<сопроводительное>", "L": "<все поля формы: значения>", "M": "<источник: {feed} → сайт работодателя>", "N": ""}}
 Последняя строка: PLAN: ok   или   PLAN: skip — <почему не подаваться>"""
+
+PLAN_HH = """
+Это отклик на hh.ru (у работодателя своей формы нет); открыта форма отклика hh (form-snap.txt).
+- Резюме на hh — по трекам: ~/.config/job-apply/hh-resumes.json (tracks: ml, da, dc, py; aliases: DS→ml, DA/PA/BA→da …).
+  Tailored-yaml назови по алиасу трека как обычно; в fill-plan.json добавь "hh_track": "<ключ из tracks>" —
+  код до заполнения перепишет это резюме на hh из твоего yaml (hh.mjs sync).
+- В fields: выбор резюме — пункт с названием резюме этого трека, как он виден в form-snap; сопроводительное — в поле
+  письма (если поле скрыто за «Сопроводительное письмо»/«Добавить» — так и подпиши поле, исполнитель раскроет);
+  вопросы работодателя — ответы по профилю. Файл не загружаем: "resume_pdf" оставь, но upload в fields не нужен.
+- tracker-row: M = «<источник> → hh.ru», H начни с «hh.ru: ».
+"""
 
 FILL = """Ты исполнитель. ЗАПОЛНИ открытую форму отклика СТРОГО по плану {appdir}/fill-plan.json. ОТПРАВЛЯТЬ НЕЛЬЗЯ
 (кнопка отправки всё равно заблокирована без подтверждения пользователя — не пытайся).
@@ -275,6 +292,26 @@ def handoff(appdir, why):
     return "manual", f"{why}; значения в {appdir.name}/manual.md и в TG"
 
 
+def post_text(q):
+    """Текст поста канала из базы дайджеста — t.me из браузера часто не грузится, а текст у нас уже есть."""
+    try:
+        sys.path.insert(0, str(SKILL.parent / "job-digest" / "scripts"))
+        import digest as D
+        import html as H
+        links = [u for u in (q.get("post"), q.get("href")) if u]
+        row = next((r for u in links for r in D.db().execute(
+            "select html from items where link = ? or guid = ? limit 1", (u, u))), None)
+        if not row:
+            return ""
+        t = re.sub(r'<a [^>]*href="([^"]+)"[^>]*>(.*?)</a>', r"\2 (\1)", row[0], flags=re.S)
+        t = H.unescape(re.sub(r"<br\s*/?>|</p>", "\n", t))
+        t = re.sub(r"<[^>]+>", "", t).strip()[:3000]
+        return f"Текст поста (из базы дайджеста; t.me не открывай — всё нужное здесь):\n---\n{t}\n---"
+    except Exception as e:
+        print(f"WARN: текст поста: {e}", file=sys.stderr)
+        return ""
+
+
 def run(key):
     q = json.loads(sh([sys.executable, "-I", str(HERE / "queue.py"), "show", key]).stdout)
     slug = re.sub(r"[^\w]+", "-", q["title"].lower())[:50].strip("-") or key
@@ -288,16 +325,14 @@ def run(key):
 
     # 1. разведка
     st.step("разведка")
-    out = executor(RECON.format(B=B, H=HERE, **q), logs / "1-recon")
+    out = executor(RECON.format(B=B, H=HERE, post_text=post_text(q), **q), logs / "1-recon")
     r = last_line(out, "RECON")
-    if not r.startswith("ok"):
+    channel = "hh" if r.startswith("hh ") else "site"             # hh: форма отклика hh, тот же конвейер
+    if not (r.startswith("ok") or channel == "hh"):
         st.step("разведка", r or "исполнитель не ответил")
         kind = r.split()[0] if r else ""
         # paused — только когда ждём человека у открытой формы; сбой разведки очередь не держит
         status = {"closed": "skipped", "blacklist": "skipped", "dup": "skipped", "not_found": "skipped"}.get(kind, "failed")
-        if kind == "hh":
-            note = f"только hh.ru: {r[3:]} — отклик через hh.mjs (worker hh пока не делает)"
-            return "failed", note
         if not r:                                                 # бюджет/время кончились без вердикта
             return "failed", f"разведка без итога ({last_line(out, 'TIMEOUT') or 'нет ответа'}): вакансию у работодателя не нашёл"
         return status, f"разведка: {r}"
@@ -312,7 +347,8 @@ def run(key):
     st.step("план и резюме")
     rec = recipe(url)
     rec_txt = f"\nРецепт сайта {host_of(url)} (с прошлых откликов — значения полей бери в его формате):\n{rec}\n" if rec else ""
-    out = planner(PLAN.format(appdir=appdir, H=HERE, today=today, feed=q["feed"]) + rec_txt, appdir, logs / "2-plan.json")
+    out = planner(PLAN.format(appdir=appdir, H=HERE, today=today, feed=q["feed"]) + rec_txt
+                  + (PLAN_HH if channel == "hh" else ""), appdir, logs / "2-plan.json")
     p = last_line(out, "PLAN")
     if p.startswith("skip"):
         st.step("план и резюме", p)
@@ -321,6 +357,15 @@ def run(key):
         st.step("план и резюме", "ошибка")
         return "failed", f"план: {out[-200:]}"
     st.step("план и резюме", "готово")
+    if channel == "hh":                                            # резюме трека на hh — из tailored-файла отклика
+        st.step("резюме на hh")
+        track = json.loads((appdir / "fill-plan.json").read_text(encoding="utf-8")).get("hh_track", "")
+        yml = next(iter(sorted(appdir.glob(f"*_{track}.yaml"))), None) if track else None
+        if yml:
+            sy = sh(["node", str(HERE / "hh.mjs"), "sync", track, str(yml)])
+            st.step("резюме на hh", "обновлено" if sy.returncode == 0 else f"не обновил: {sy.stderr.strip()[-120:]}")
+        else:
+            st.step("резюме на hh", "трек не указан — отклик с текущим резюме")
 
     # 3–5. заполнение → проверка → гейт (с правками пользователя по кругу)
     extra = ""
@@ -391,7 +436,7 @@ def run(key):
         fh.write("\t".join([today, plan["company"], plan["title"], plan["url"],
                             str(Path(plan.get("resume_pdf", "")).relative_to(HOME / "applications"))
                             if plan.get("resume_pdf", "").startswith(str(HOME / "applications")) else plan.get("resume_pdf", ""),
-                            "отправлено"]) + "\n")
+                            "отправлено (hh)" if channel == "hh" else "отправлено"]) + "\n")
     row = appdir / "tracker-row.json"
     t = sh([sys.executable, "-I", str(HERE / "tracker.py"), "add"], input=row.read_text()) if row.exists() else None
     st.step("трекер", (t.stdout.strip() if t else "нет строки")[:80])
