@@ -111,6 +111,9 @@ def decide():
     out = []
     for tid, t in th.items():
         kind = t.get("kind", "")
+        if kind == "control":                                       # «Пульт» tg-bridge — не трогаем
+            out.append(dict(tid=tid, key="", name=t.get("name", ""), verdict="running", why="пульт бота"))
+            continue
         if not kind.startswith("apply:"):
             verdict = "running" if tid in busy else "other"
             out.append(dict(tid=tid, key="", name=t.get("name", ""), verdict=verdict,

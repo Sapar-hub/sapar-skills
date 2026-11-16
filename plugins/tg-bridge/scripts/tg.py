@@ -147,20 +147,49 @@ def create_topic(api, name, **info):
     return r["message_thread_id"]
 
 
+CONTROL_NAME = "🎛 Пульт"
+
+
+def control_thread(api):
+    """Вкладка «Пульт» (kind=control): всё, что шлётся без вкладки — кнопки дайджестов, уведомления, ответы
+    на команды из неё. Общий чат в Threaded Mode показывает переписку всех вкладок разом, туда не пишем.
+    Нет — создаём; не вышло — None (тогда общий чат)."""
+    for tid, t in threads().items():
+        if t.get("kind") == "control":
+            return int(tid)
+    try:
+        return create_topic(api, CONTROL_NAME, kind="control")
+    except Exception as e:
+        print(f"WARN: вкладка «Пульт» не создана: {e}", file=sys.stderr)
+        return None
+
+
+def forget_control():
+    t = threads()
+    for tid in [k for k, v in t.items() if v.get("kind") == "control"]:
+        t.pop(tid)
+    write_atomic(d("threads.json"), json.dumps(t, ensure_ascii=False, indent=1))
+
+
 def keyboard(rows):
     return {"inline_keyboard": rows} if rows else None
 
 
 def deliver(api, text, html=False, photo=None, doc=None, markup=None, reply_to=None, thread=None):
     """Одно логическое сообщение. Клавиатура — на последнем куске. -> (message_id, kind).
-    thread: вкладка; по умолчанию TG_THREAD. Вкладку удалили — шлём в общий чат."""
+    thread: вкладка; по умолчанию TG_THREAD, без неё — «Пульт». Вкладку удалили — «Пульт» (пересоздаётся)."""
     thread = thread if thread is not None else env_thread()
+    control = thread is None
+    if control:
+        thread = control_thread(api)
     try:
         return _deliver(api, text, html, photo, doc, markup, reply_to, thread)
     except RuntimeError as e:
-        if thread and "thread not found" in str(e).lower():
-            return _deliver(api, text, html, photo, doc, markup, None, None)
-        raise
+        if not (thread and "thread not found" in str(e).lower()):
+            raise
+        if control:                                            # «Пульт» удалили руками — создать заново
+            forget_control()
+        return _deliver(api, text, html, photo, doc, markup, None, control_thread(api))
 
 
 def _deliver(api, text, html, photo, doc, markup, reply_to, thread):
