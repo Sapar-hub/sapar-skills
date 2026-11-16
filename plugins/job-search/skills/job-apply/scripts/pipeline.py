@@ -263,13 +263,14 @@ def handoff(appdir, why):
         elif f.get("check"):
             rows.append(f"[x] {f['label']}")
     cl = (plan.get("cover_letter") or "").strip()
-    text = (f"{plan.get('company', '?')} — {plan.get('title', '?')}\n{plan.get('url', '')}\n"
+    head = f"{plan.get('company', '?')} — {plan.get('title', '?')}"
+    text = ((f"[{head}]({plan['url']})" if plan.get("url") else head) + "\n"
             f"Заполнить руками ({why}).\n\n" + "\n".join(rows) + (f"\n\nСопроводительное:\n{cl}" if cl else ""))
     (appdir / "manual.md").write_text(text + "\n", encoding="utf-8")
     subprocess.run(["tg", "send", text[:4000]], capture_output=True)
     if plan.get("resume_pdf") and Path(plan["resume_pdf"]).exists():
         subprocess.run(["tg", "send", "Резюме для этого отклика", "--doc", plan["resume_pdf"]], capture_output=True)
-    return "manual", f"{why}; значения в {appdir.name}/manual.md и в TG: {plan.get('url', '')}"
+    return "manual", f"{why}; значения в {appdir.name}/manual.md и в TG"
 
 
 def run(key):

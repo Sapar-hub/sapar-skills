@@ -34,7 +34,8 @@ def no_confirm(url):
 
 
 def summary(plan):
-    lines = [f"{plan.get('company', '?')} — {plan.get('title', '?')}", plan.get("url", ""), ""]
+    head = f"{plan.get('company', '?')} — {plan.get('title', '?')}"
+    lines = [f"[{head}]({plan['url']})" if plan.get("url") else head, ""]          # tg: ссылкой, без адреса
     for f in plan.get("fields", []):
         if "value" in f or "select" in f:
             lines.append(f"{f['label']}: {f.get('value', f.get('select'))}")

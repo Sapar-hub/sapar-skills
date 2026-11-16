@@ -76,7 +76,7 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
   fi
   rm -f "$H/runs/$JOB_APPLY_RUN"
   [ "$(cat "$H/browser.owner" 2>/dev/null)" = "$JOB_APPLY_RUN" ] && rm -f "$H/browser.owner"
-  line=$(grep -E '^STATUS: (done|skipped|paused|failed|bl-done)' "$out" | tail -1)
+  line=$(grep -E '^STATUS: (done|skipped|paused|failed|manual|bl-done)' "$out" | tail -1)
   status=$(printf '%s' "$line" | awk '{print $2}')
   [ -n "$status" ] || { status=failed; line="STATUS: failed — агент не вернул статус"; }
   # лимит/доступ к API — не вина вакансии: вернуть в очередь и остановиться, а не прогнать впустую всю очередь

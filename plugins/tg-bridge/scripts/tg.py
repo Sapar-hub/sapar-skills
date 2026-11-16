@@ -192,6 +192,30 @@ def deliver(api, text, html=False, photo=None, doc=None, markup=None, reply_to=N
         return _deliver(api, text, html, photo, doc, markup, None, control_thread(api))
 
 
+URL_RE = re.compile(r"\[([^\]\n]{1,80})\]\((https?://[^\s)]+)\)|(https?://[^\s<>()\[\]«»\"']+[^\s<>()\[\]«»\"'.,;:!?])")
+
+
+def linkify(text):
+    """Обычный текст -> HTML: [текст](url) и голые ссылки — кликабельные, без простыни адреса
+    (голая ссылка показывается именем сайта). Остальное экранируется."""
+    from urllib.parse import urlparse
+    out, pos = [], 0
+    for m in URL_RE.finditer(text):
+        out.append(html_escape(text[pos:m.start()]))
+        label, url = (m.group(1), m.group(2)) if m.group(2) else (None, m.group(3))
+        if label is None:
+            label = (urlparse(url).hostname or url).removeprefix("www.")
+        out.append(f'<a href="{html_escape(url, quote=True)}">{html_escape(label)}</a>')
+        pos = m.end()
+    out.append(html_escape(text[pos:]))
+    return "".join(out)
+
+
+def html_escape(s, quote=False):
+    import html as _h
+    return _h.escape(s, quote=quote)
+
+
 def _deliver(api, text, html, photo, doc, markup, reply_to, thread):
     cid = chat_id() or die("чат не привязан: напиши боту /start при запущенном `tg daemon`")
     mode = "HTML" if html else None
@@ -199,6 +223,8 @@ def _deliver(api, text, html, photo, doc, markup, reply_to, thread):
         f = d("out", f"msg-{int(time.time())}.txt")
         f.write_text(text, encoding="utf-8")
         doc, text, mode = f, text[:300].rsplit(" ", 1)[0] + " …(полностью в файле)", None
+    if mode is None and text and "http" in text:               # ссылки — именем, а не полным адресом
+        text, mode = linkify(text), "HTML"
     media = ("sendPhoto", "photo", photo) if photo else ("sendDocument", "document", doc) if doc else None
     if media:
         cap_fits = len(text) <= MAX_CAPTION

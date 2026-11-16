@@ -287,19 +287,32 @@ const cmds = {
     await sel.evaluate((el) => el.scrollIntoView({ block: 'center' }));
     await sel.click({ timeout: 5000 }).catch(() => sel.click({ force: true }));   // липкие шапки перекрывают поле
     const input = locate(page, ref);
-    if (!(await input.getAttribute('readonly'))) {                    // с поиском: печатаем и ждём фильтрации
-      await input.pressSequentially(text, { delay: 30 });
+    const searchable = !(await input.getAttribute('readonly'));
+    const type = async (q) => {                                         // с поиском: чистим остаток прошлой попытки,
+      await input.press('Control+a').catch(() => {});                   // иначе «МИРЭА» допишется к «РТУ МИРЭА»
+      await input.press('Backspace').catch(() => {});
+      await input.pressSequentially(q, { delay: 30 });
       await page.waitForTimeout(1200);
-    }
+    };
+    if (searchable) await type(text);
     // все выпадашки Ant Design живут в DOM — берём только список этого поля
     const id = await input.getAttribute('id');
     const opts = page.locator(`.ant-select-dropdown:has([id="${id}_list"]) .ant-select-item-option`);
     await opts.first().waitFor({ timeout: 10000 });
     // точный пункт — по title или по тексту целиком («Москва», а не «Москва (деревня)» / «Новая Москва»)
     const esc = text.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    let exact = opts.filter({ has: page.locator(`xpath=self::*[@title=${JSON.stringify(text)}]`) });
-    if (!(await exact.count())) exact = opts.filter({ hasText: new RegExp(`^\\s*${esc}\\s*$`, 'i') });
-    const pickIt = (await exact.count()) ? exact.first() : opts.filter({ hasText: text }).first();
+    const find = async () => {
+      let exact = opts.filter({ has: page.locator(`xpath=self::*[@title=${JSON.stringify(text)}]`) });
+      if (!(await exact.count())) exact = opts.filter({ hasText: new RegExp(`^\\s*${esc}\\s*$`, 'i') });
+      return (await exact.count()) ? exact.first() : opts.filter({ hasText: text }).first();
+    };
+    let pickIt = await find();
+    // поиск сайта бывает по слову, а не по фразе («Институт кибербезопасности и…» ничего не находит целиком)
+    const first = text.trim().split(/\s+/)[0];
+    if (!(await pickIt.count()) && searchable && first !== text.trim()) {
+      await type(first);
+      pickIt = await find();
+    }
     if (!(await pickIt.count())) die(`нет пункта «${text}»; есть: ${(await opts.allInnerTexts()).slice(0, 15).join(' | ')}`);
     await pickIt.click();
     await page.waitForTimeout(400);
