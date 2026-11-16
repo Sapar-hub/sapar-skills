@@ -240,5 +240,36 @@ class Parallel(Agent):
         self.assertEqual(self.tg.run_action("where", ""), (0, ""))
 
 
+
+class ControlTab(unittest.TestCase):
+    """Команда из «All»: клиент заводит вкладку сам — ответ уходит в «Пульт», автовкладка удаляется."""
+    class Api(FakeApi):
+        def call(self, method, files=None, **kw):
+            self.calls.append((method, kw))
+            return {"message_id": 1, "message_thread_id": 500} if method == "createForumTopic" else {"message_id": 1}
+
+    def setUp(self):
+        self.tg, self.tmp = load()
+        self.api = self.Api()
+        self.tg.route(self.api, msg(42, "/start"))
+        self.api.calls.clear()
+
+    def sent_threads(self):
+        return [kw.get("message_thread_id") for m, kw in self.api.calls if m == "sendMessage"]
+
+    def test_command_from_all_goes_to_control(self):
+        svc = msg(42, "", message_thread_id=77, is_topic_message=True, forum_topic_created={"name": "/help"})
+        self.assertEqual(self.tg.route(self.api, svc), "drop:service")
+        self.tg.route(self.api, msg(42, "/help", message_thread_id=77, is_topic_message=True))
+        self.assertEqual(self.sent_threads(), [500])
+        self.assertIn(("deleteForumTopic", {"chat_id": 42, "message_thread_id": 77}), self.api.calls)
+        self.assertEqual(self.tg.threads()["500"]["kind"], "control")
+
+    def test_command_in_own_tab_stays(self):
+        self.tg.save_thread(88, name="задача", kind="task")
+        self.tg.route(self.api, msg(42, "/help", message_thread_id=88, is_topic_message=True))
+        self.assertEqual(self.sent_threads(), [88])
+        self.assertFalse([c for c in self.api.calls if c[0] == "deleteForumTopic"])
+
 if __name__ == "__main__":
     unittest.main()

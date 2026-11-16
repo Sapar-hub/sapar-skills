@@ -448,6 +448,8 @@ def route(api, upd):
             return f"cmd:{name}+reply"
     if text.startswith("/"):
         return command(api, me, msg, text)
+    if "forum_topic_created" in msg and msg.get("message_thread_id"):
+        FRESH[msg["message_thread_id"]] = time.time()              # клиент сам завёл вкладку под сообщение из «All»
     if any(k.startswith(("forum_topic_", "general_forum_topic_")) for k in msg) or msg.get("pinned_message"):
         return "drop:service"                                     # «тема создана» и пр. — не пересылка, без фантомной сессии
     agent = load_agent()
@@ -539,7 +541,40 @@ def enqueue_task(api, me, msg, text, thread=None, new_tab=False):
                  reply_parameters={"message_id": msg["message_id"]})
 
 
+# Вкладки, которые клиент Telegram создал сам: в Threaded Mode сообщение, отправленное из общего списка «All»,
+# становится новой вкладкой (сначала приходит служебное forum_topic_created, следом — само сообщение).
+FRESH = {}
+FRESH_TTL = 120
+
+
+def auto_topic(api, msg):
+    """Команда пришла во вкладку, которую клиент только что завёл сам (не наша, не из threads.json)? -> её id."""
+    here = msg_thread(msg)
+    born = FRESH.get(here) if here else None
+    if born and time.time() - born < FRESH_TTL and str(here) not in threads():
+        return here
+    return None
+
+
 def command(api, me, msg, text):
+    # команда из «All»: отвечаем в «Пульт», а пустую автовкладку убираем — не плодим вкладку на каждую команду
+    stray = auto_topic(api, msg)
+    if stray:
+        ctl = control_thread(api)
+        if ctl:
+            msg = {**msg, "is_topic_message": True, "message_thread_id": ctl}
+        try:
+            return command_in(api, me, msg, text)
+        finally:
+            FRESH.pop(stray, None)
+            try:
+                api.call("deleteForumTopic", chat_id=me, message_thread_id=stray)
+            except Exception as e:
+                print(f"WARN: автовкладка {stray} не удалена: {e}", file=sys.stderr, flush=True)
+    return command_in(api, me, msg, text)
+
+
+def command_in(api, me, msg, text):
     name = text[1:].split()[0].split("@")[0]
     say = lambda t: api.call("sendMessage", chat_id=me, text=t, message_thread_id=msg_thread(msg),
                              link_preview_options={"is_disabled": True})
