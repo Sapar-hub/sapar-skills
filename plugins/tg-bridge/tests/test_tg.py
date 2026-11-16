@@ -271,5 +271,21 @@ class ControlTab(unittest.TestCase):
         self.assertEqual(self.sent_threads(), [88])
         self.assertFalse([c for c in self.api.calls if c[0] == "deleteForumTopic"])
 
+
+class Links(unittest.TestCase):
+    def setUp(self):
+        self.tg, _ = load()
+
+    def test_markdown_and_bare_links_become_names(self):
+        p = self.tg.links_as_names("sendMessage", {"text": "[Митап](https://habr.com/a?x=1&y=2) и https://www.ozon.ru/career/."})
+        self.assertEqual(p["parse_mode"], "HTML")
+        self.assertEqual(p["text"], '<a href="https://habr.com/a?x=1&amp;y=2">Митап</a> и '
+                                    '<a href="https://www.ozon.ru/career/">ozon.ru</a>.')
+
+    def test_own_markup_and_plain_text_untouched(self):
+        html = {"text": '<a href="https://x.ru">x</a>', "parse_mode": "HTML"}
+        self.assertEqual(self.tg.links_as_names("sendMessage", html), html)
+        self.assertEqual(self.tg.links_as_names("sendMessage", {"text": "a < b"}), {"text": "a < b"})
+
 if __name__ == "__main__":
     unittest.main()

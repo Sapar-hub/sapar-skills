@@ -380,8 +380,9 @@ def cmd_show(a):
     if not rows:
         print("Ближайших событий нет. Анонсы приходят в 10:17.")
     for e in rows:
+        title = re.sub(r"[\[\]]", "", e["title"][:70])             # [название](ссылка): в TG — ссылка названием
         print(f"#{e['id']} {e['status']:9} {fmt(e['start'], e['start_is_guess']) if e['start'] else 'дата?':11}"
-              f" {e['title'][:70]} <{e['link']}>")
+              f" [{title}]({e['link']})")
 
 
 def cmd_log(a):

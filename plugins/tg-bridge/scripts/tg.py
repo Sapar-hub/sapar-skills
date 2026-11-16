@@ -67,6 +67,19 @@ def write_atomic(path, text):
 
 # --- Bot API ---
 
+def links_as_names(method, params):
+    """Всё, что бот пишет человеку без своей разметки, уходит HTML-ем: [текст](url) и голые ссылки — кликабельные,
+    без простыни адреса. Одна точка для send/ask/edit/ответов на команды/подписей."""
+    if method not in ("sendMessage", "editMessageText", "sendPhoto", "sendDocument", "editMessageCaption"):
+        return params
+    key = "text" if "text" in params else "caption" if "caption" in params else None
+    if key and params.get(key) and not params.get("parse_mode") and URL_RE.search(params[key]):
+        html_text = linkify(params[key])
+        if len(html_text) <= (MAX_CAPTION if key == "caption" else MAX_TEXT):   # не влезло — шлём как было
+            params = {**params, key: html_text, "parse_mode": "HTML"}
+    return params
+
+
 class Api:
     def __init__(self, env=None):
         env = env or load_env()
@@ -78,6 +91,7 @@ class Api:
         self.opener = urllib.request.build_opener(*h)
 
     def call(self, method, files=None, timeout=70, **params):
+        params = links_as_names(method, params)
         params = {k: (json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
                   for k, v in params.items() if v is not None}
         if files:
@@ -223,8 +237,6 @@ def _deliver(api, text, html, photo, doc, markup, reply_to, thread):
         f = d("out", f"msg-{int(time.time())}.txt")
         f.write_text(text, encoding="utf-8")
         doc, text, mode = f, text[:300].rsplit(" ", 1)[0] + " …(полностью в файле)", None
-    if mode is None and text and "http" in text:               # ссылки — именем, а не полным адресом
-        text, mode = linkify(text), "HTML"
     media = ("sendPhoto", "photo", photo) if photo else ("sendDocument", "document", doc) if doc else None
     if media:
         cap_fits = len(text) <= MAX_CAPTION
