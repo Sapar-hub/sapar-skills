@@ -17,6 +17,8 @@
 
 Окружение: JOB_APPLY_RUN и TG_THREAD ставит worker.sh. Исполнитель: OpenCode с изолированным конфигом
 ~/.config/job-apply/opencode-executor (allowlist), из чистой папки в /tmp, с таймаутом и одним повтором.
+Лимит провайдера (429): JOB_APPLY_EXEC_FALLBACK=<провайдер/модель> (worker.env, провайдер — в конфиге исполнителя)
+— переход на запасную модель до конца прогона; без неё — «usage limit» в STATUS, worker.sh возвращает вакансию в очередь.
 """
 import json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
@@ -67,20 +69,56 @@ def sh(cmd, **kw):
 
 # --- исполнитель и планировщик -------------------------------------------------------------------------------
 
+class ExecutorLimit(Exception):
+    pass
+
+
+# Запасная модель исполнителя (OpenCode «провайдер/модель», напр. qwen/qwen3.8-max): берётся, когда основная
+# упёрлась в лимит, и остаётся до конца прогона. Провайдер описан в opencode-executor/opencode.jsonc, ключ — в worker.env.
+FALLBACK = os.environ.get("JOB_APPLY_EXEC_FALLBACK", "").strip()
+MODEL = None                                                      # None — модель из конфига исполнителя
+
+
+def provider_limit(out):
+    """Ошибка лимита провайдера в json-выводе OpenCode -> текст, иначе ''."""
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        err = ev.get("error") if ev.get("type") == "error" else None
+        if isinstance(err, dict) and (err.get("status") == 429 or "limit" in str(err.get("type", "")).lower()):
+            return f"{err.get('message', err.get('type'))}; retry через ~{int(err.get('retryAfterMs', 0) / 3.6e6)} ч"
+    return ""
+
+
 def executor(prompt, log, timeout=600, tries=2):
     """OpenCode из чистой папки с allowlist-конфигом. -> последний текст ответа ('' — не ответил)."""
-    for attempt in range(1, tries + 1):
+    global MODEL
+    attempt = 0
+    while attempt < tries:
+        attempt += 1
         work = tempfile.mkdtemp(prefix="ja-exec.")
         env = {**os.environ, "OPENCODE_CONFIG_DIR": str(EXEC_CONF)}
+        cmd = [OPENCODE, "run", "--standalone", "--format", "json"] + (["-m", MODEL] if MODEL else []) + [prompt]
         timed_out = False
         try:
-            p = subprocess.run([OPENCODE, "run", "--standalone", "--format", "json", prompt], cwd=work, env=env,
-                               capture_output=True, text=True, timeout=timeout)
+            p = subprocess.run(cmd, cwd=work, env=env, capture_output=True, text=True, timeout=timeout)
             out = p.stdout
         except subprocess.TimeoutExpired as e:
             timed_out = True
             out = (e.stdout or b"").decode(errors="ignore") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        Path(f"{log}.{attempt}.jsonl").write_text(out)
+        Path(f"{log}.{attempt}{'.' + MODEL.replace('/', '_') if MODEL else ''}.jsonl").write_text(out)
+        lim = provider_limit(out)
+        if lim:
+            # лимит провайдера: повтор той же модели не поможет — переходим на запасную (если есть),
+            # иначе ExecutorLimit: текст «usage limit» ловит worker.sh, вернёт вакансию в очередь и остановится
+            if FALLBACK and MODEL != FALLBACK:
+                MODEL, attempt = FALLBACK, attempt - 1
+                if ST:
+                    ST.step("исполнитель", f"лимит основной модели → {FALLBACK}")
+                continue
+            raise ExecutorLimit(f"usage limit исполнителя (OpenCode{', ' + MODEL if MODEL else ''}): {lim}")
         texts, tools = [], 0
         for line in out.splitlines():
             try:
@@ -302,6 +340,8 @@ def main():
         sys.exit(__doc__)
     try:
         status, note = run(sys.argv[1])
+    except ExecutorLimit as e:
+        status, note = "failed", str(e)
     except Exception as e:
         status, note = "failed", f"{type(e).__name__}: {e}"
     if ST:
