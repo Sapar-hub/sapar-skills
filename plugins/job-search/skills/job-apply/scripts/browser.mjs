@@ -17,7 +17,8 @@
 //   browser.mjs upload <ref> <file>
 //   browser.mjs press <key>         Enter, Tab, Escape…
 //   browser.mjs tabs | tab <n>      вкладки / переключиться
-//   browser.mjs shot [file.png]     скриншот (по умолчанию $JOB_APPLY_HOME/shot.png)
+//   browser.mjs shot [file.png]     скриншот (по умолчанию $JOB_APPLY_HOME/shot.png, в прогоне shot-<прогон>.png)
+//   browser.mjs droptab             закрыть вкладку прогона (worker.sh в конце отклика)
 //   browser.mjs back | wait <ms>
 import { chromium } from 'playwright';
 import { claimBrowser, needToken, useToken, IS_SUBMIT_JS, ENTER_SUBMITS_JS, SUBMIT_RE } from './lock.mjs';
@@ -84,18 +85,52 @@ const SNAP_JS = (prefix) => {
   return out;
 };
 
+// Прогон (JOB_APPLY_RUN) работает в СВОЕЙ вкладке: браузер один (профиль с логинами), прогонов — сколько угодно
+// параллельно. Вкладка прогона — по targetId CDP в $JOB_APPLY_HOME/tabs/<прогон>; ручной запуск — «текущая» (TAB_FILE).
+const RUN = process.env.JOB_APPLY_RUN || '';
+const RUN_TAB = RUN ? join(HOME, 'tabs', RUN) : '';
+
+async function targetId(ctx, page) {
+  const s = await ctx.newCDPSession(page);
+  try { return (await s.send('Target.getTargetInfo')).targetInfo.targetId; } finally { await s.detach().catch(() => {}); }
+}
+
+async function rememberTab(ctx, page) {
+  mkdirSync(join(HOME, 'tabs'), { recursive: true });
+  writeFileSync(RUN_TAB, await targetId(ctx, page));
+}
+
 async function connect() {
-  await claimBrowser(HOME);                         // headless-прогоны: браузер один, ждём своей очереди (lock.mjs)
+  await claimBrowser(HOME);                         // эксклюзивный режим (JOB_APPLY_PARALLEL=0) — ждём своей очереди
   let browser;
   try { browser = await chromium.connectOverCDP(CDP); } catch { die('браузер не запущен: browser.mjs start'); }
   const ctx = browser.contexts()[0];
   const pages = ctx.pages();
   if (!pages.length) pages.push(await ctx.newPage());
-  let i = existsSync(TAB_FILE) ? Number(readFileSync(TAB_FILE, 'utf8')) : pages.length - 1;
-  if (!(i >= 0 && i < pages.length)) i = pages.length - 1;
+  let page;
+  if (RUN) {
+    const want = existsSync(RUN_TAB) ? readFileSync(RUN_TAB, 'utf8').trim() : '';
+    for (const p of pages) if (want && await targetId(ctx, p).catch(() => '') === want) { page = p; break; }
+    if (!page) {
+      // прогон, начатый до вкладок по прогонам, держит браузер (browser.owner) — его форма в «текущей» вкладке
+      const owner = existsSync(join(HOME, 'browser.owner')) ? readFileSync(join(HOME, 'browser.owner'), 'utf8').trim() : '';
+      if (!want && owner === RUN) {
+        let i = existsSync(TAB_FILE) ? Number(readFileSync(TAB_FILE, 'utf8')) : pages.length - 1;
+        page = pages[i >= 0 && i < pages.length ? i : pages.length - 1];
+      } else {
+        page = await ctx.newPage();
+        pages.push(page);
+      }
+      await rememberTab(ctx, page);
+    }
+  } else {
+    let i = existsSync(TAB_FILE) ? Number(readFileSync(TAB_FILE, 'utf8')) : pages.length - 1;
+    if (!(i >= 0 && i < pages.length)) i = pages.length - 1;
+    page = pages[i];
+  }
   // узкое окно = мобильная вёрстка с баннерами «скачайте приложение», перекрывающими формы
-  await pages[i].setViewportSize({ width: 1366, height: 900 }).catch(() => {});
-  return { browser, ctx, pages, page: pages[i] };
+  await page.setViewportSize({ width: 1366, height: 900 }).catch(() => {});
+  return { browser, ctx, pages, page };
 }
 
 // отправка в headless-прогоне: только с токеном от gate.py (см. lock.mjs)
@@ -410,8 +445,14 @@ const cmds = {
   },
   async back(_, { page }) { await page.goBack(); await settle(page); console.log(`OK: ${page.url()}`); },
   async wait([ms], { page }) { await page.waitForTimeout(Number(ms) || 1000); console.log('OK'); },
+  async droptab(_, { page }) {                     // конец прогона: закрыть его вкладку
+    if (!RUN) die('droptab — только в прогоне (JOB_APPLY_RUN)');
+    await page.close().catch(() => {});
+    try { (await import('node:fs')).unlinkSync(RUN_TAB); } catch {}
+    console.log('OK: вкладка прогона закрыта');
+  },
   async shot([file], { page }) {
-    const out = resolve(file || join(HOME, 'shot.png'));
+    const out = resolve(file || join(HOME, RUN ? `shot-${RUN}.png` : 'shot.png'));
     await page.screenshot({ path: out });
     console.log(out);
   },
@@ -433,7 +474,8 @@ if (cmd === 'start') await cmds.start(args);
 else {
   const c = await connect();
   // новая вкладка, открытая кликом (target=_blank), становится текущей
-  if (cmd === 'click') c.ctx.once('page', (p) => writeFileSync(TAB_FILE, String(c.ctx.pages().indexOf(p))));
+  if (cmd === 'click') c.ctx.once('page', (p) => (RUN ? rememberTab(c.ctx, p).catch(() => {})
+    : writeFileSync(TAB_FILE, String(c.ctx.pages().indexOf(p)))));
   // повторяем только чтение: повторный click/fill может, например, отправить анкету дважды
   const run = () => cmds[cmd](args, c);
   try { await (['snap', 'text', 'tabs', 'shot'].includes(cmd) ? retry(run, c.page) : run()); }

@@ -23,6 +23,8 @@ function title(home, run) {
 export async function claimBrowser(home) {
   const me = process.env.JOB_APPLY_RUN;
   if (!me) return;
+  // по умолчанию прогоны параллельны — у каждого своя вкладка (browser.mjs); эксклюзив — JOB_APPLY_PARALLEL=0
+  if (process.env.JOB_APPLY_PARALLEL !== '0') return;
   mkdirSync(home, { recursive: true });
   const owner = join(home, 'browser.owner');
   const deadline = Date.now() + WAIT_MIN * 60_000;

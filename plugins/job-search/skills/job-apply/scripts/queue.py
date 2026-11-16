@@ -3,6 +3,7 @@
 
   queue.py list [--all]            что ждёт (new, bl-review, paused) или всё
   queue.py next                    ключ первого `new`/`bl-review` (пусто — очередь пуста)
+  queue.py claim                   то же + сразу in-progress, под файловым локом (параллельные слоты worker.sh)
   queue.py show <key>              строка очереди как JSON
   queue.py set <key> <status> [--note …]
   queue.py add --key K --title T --href URL [--feed --details --post --note]   (дубли по key/href не добавляет)
@@ -47,6 +48,7 @@ def main():
     sp = ap.add_subparsers(dest="cmd", required=True)
     l = sp.add_parser("list"); l.add_argument("--all", action="store_true")
     sp.add_parser("next")
+    sp.add_parser("claim")                                          # next + in-progress атомарно (параллельные слоты)
     sp.add_parser("show").add_argument("key")
     s = sp.add_parser("set"); s.add_argument("key"); s.add_argument("status", choices=STATUSES); s.add_argument("--note")
     ad = sp.add_parser("add")                                       # элемент не из дайджеста (напр. hh — второй канал)
@@ -61,6 +63,16 @@ def main():
             if a.all or r["status"] in OPEN:
                 print(f"{r['key']:>8}  {r['status']:<11} {r['title']}  {r['href'] or r['post']}"
                       + (f"  — {r['note']}" if r["note"] else ""))
+    elif a.cmd == "claim":
+        import fcntl
+        with open(F.with_suffix(".lock"), "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            rows = load()
+            r = next((r for r in rows if r["status"] in ("new", "bl-review")), None)
+            if r:
+                r["status"] = "in-progress"
+                save(rows)
+                print(r["key"])
     elif a.cmd == "next":
         r = next((r for r in rows if r["status"] in ("new", "bl-review")), None)
         if r:

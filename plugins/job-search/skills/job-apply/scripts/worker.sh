@@ -19,6 +19,8 @@ LOGIN_SHELL=()
 command -v fish >/dev/null && LOGIN_SHELL=("$(command -v fish)" -c 'exec $argv')
 
 mkdir -p "$H/worker-logs"
+# параллельные слоты: каждый отклик — в своей вкладке браузера (browser.mjs), элементы очереди берутся атомарно
+SLOTS=${JOB_APPLY_SLOTS:-2}
 exec 9>"$H/worker.lock"
 flock -n 9 || { echo "worker уже работает"; exit 0; }
 
@@ -55,8 +57,8 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
   SESS="$HOME/.local/share/tg-bridge/sessions/${TG_THREAD:-apply-$key}"
   # прогон для лока браузера (lock.mjs): браузер занимает первый вызов browser.mjs, отпускаем после вакансии,
   # чтобы задачи из чата с браузером могли вклиниться между откликами
-  export JOB_APPLY_RUN="apply-$key-$$"
-  mkdir -p "$H/runs"; printf '%s\n%s\n' "$$" "отклик: $title" > "$H/runs/$JOB_APPLY_RUN"
+  export JOB_APPLY_RUN="apply-$key-$BASHPID"
+  mkdir -p "$H/runs"; printf '%s\n%s\n' "$BASHPID" "отклик: $title" > "$H/runs/$JOB_APPLY_RUN"
   mkdir -p "$(dirname "$SESS")"
   # конвейер: OpenCode делает руками, Claude только план/резюме/письмо, код проверяет и держит гейт отправки.
   # Нет OpenCode/конфига исполнителя или JOB_APPLY_ENGINE=claude — старый путь: один claude -p на весь отклик.
@@ -82,12 +84,15 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
   # лимит/доступ к API — не вина вакансии: вернуть в очередь и остановиться, а не прогнать впустую всю очередь
   if grep -q -E "hit your .*limit|usage limit|rate limit|HTTP 403|Request blocked" "$log" "$out" 2>/dev/null; then
     $Q set "$key" new --note "отложено: $(grep -o -m1 -E "hit your [^\"]*|usage limit[^\"]*|HTTP 403" "$log" "$out" | head -1 | cut -d: -f2-)" >/dev/null
+    (cd "$SCRIPTS" && node browser.mjs droptab >/dev/null 2>&1)
     "$TG" send "Очередь откликов остановлена: лимит или доступ к API. Вакансия возвращена в очередь, продолжу при следующем запуске." >/dev/null 2>&1
     echo "$key limit"
     return 1
   fi
   $Q set "$key" "$status" --note "${line#STATUS: $status}" >/dev/null
   echo "$key $status"
+  # вкладка прогона: paused — оставить (форма заполнена, продолжишь), иначе закрыть
+  [ "$status" = paused ] || (cd "$SCRIPTS" && node browser.mjs droptab >/dev/null 2>&1)
   [ "$status" != paused ]                         # paused: дальше не идём, вкладку не трогаем
 }
 
@@ -95,6 +100,13 @@ if [ $# -gt 0 ]; then
   run_one "$1"
   exit 0
 fi
-while key=$($Q next) && [ -n "$key" ]; do
-  run_one "$key" || break
+slot() {                                          # слот: берёт элементы, пока есть; paused/лимит — слот встаёт
+  while key=$($Q claim) && [ -n "$key" ]; do
+    run_one "$key" || break
+  done
+}
+for _ in $(seq "$SLOTS"); do
+  slot &
+  sleep 20                                         # разнести старты: браузер/исполнитель не дёргать одновременно
 done
+wait
