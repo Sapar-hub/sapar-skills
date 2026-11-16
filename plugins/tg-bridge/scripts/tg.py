@@ -20,7 +20,7 @@
 Данные: $TG_BRIDGE_DATA (~/.local/share/tg-bridge): state.json, asks/, answers/, btn/, inbox/
 Привязка: первый /start в личке боту, пока файла chat нет. Всё из других чатов отбрасывается.
 """
-import argparse, fcntl, json, mimetypes, os, re, secrets, subprocess, sys, time, urllib.error, urllib.request
+import argparse, fcntl, json, mimetypes, os, re, secrets, shutil, subprocess, sys, time, urllib.error, urllib.request
 from pathlib import Path
 
 CONF = Path(os.environ.get("TG_BRIDGE_CONFIG", "~/.config/tg-bridge")).expanduser()
@@ -764,7 +764,24 @@ def cmd_action(a):
 
 
 def cmd_topic(a):
-    """Новая вкладка; печатает её id (export TG_THREAD=…). --cwd: где продолжать сессию этой вкладки."""
+    """Новая вкладка; печатает её id (export TG_THREAD=…). --cwd: где продолжать сессию этой вкладки.
+    tg topic rm ID... — удалить вкладки (вместе с перепиской в них) и их записи в threads.json."""
+    if a.name == "rm":
+        api, t, rc = Api(), threads(), 0
+        for tid in a.ids:
+            try:
+                api.call("deleteForumTopic", chat_id=chat_id(), message_thread_id=int(tid))
+                print(f"удалена {tid} «{t.get(str(tid), {}).get('name', '')}»")
+            except Exception as e:                                 # уже удалена руками — запись всё равно чистим
+                if "not found" not in str(e).lower() and "thread_not_found" not in str(e).lower():
+                    print(f"ERR {tid}: {e}", file=sys.stderr)
+                    rc = 1
+                    continue
+                print(f"не найдена в Telegram {tid}, убираю запись")
+            t.pop(str(tid), None)
+            shutil.rmtree(DATA / "sessions" / str(tid), ignore_errors=True)
+        write_atomic(d("threads.json"), json.dumps(t, ensure_ascii=False, indent=1))
+        sys.exit(rc)
     print(create_topic(Api(), a.name, **({"cwd": a.cwd} if a.cwd else {}), kind=a.kind))
 
 
@@ -783,7 +800,8 @@ def main():
     sp = ap.add_subparsers(dest="cmd", required=True)
     sp.add_parser("daemon").set_defaults(f=cmd_daemon)
     sp.add_parser("whoami").set_defaults(f=cmd_whoami)
-    tp = sp.add_parser("topic"); tp.add_argument("name"); tp.add_argument("--cwd"); tp.add_argument("--kind", default="task")
+    tp = sp.add_parser("topic"); tp.add_argument("name"); tp.add_argument("ids", nargs="*", help="для rm: id вкладок")
+    tp.add_argument("--cwd"); tp.add_argument("--kind", default="task")
     tp.set_defaults(f=cmd_topic)
     s = sp.add_parser("send")
     s.add_argument("text", nargs="?")

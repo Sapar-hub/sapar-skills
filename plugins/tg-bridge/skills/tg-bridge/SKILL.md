@@ -18,6 +18,7 @@ tg inbox                                      # forwarded items as JSON lines, m
 tg inbox --peek | --count
 tg action add contacts-log -- /usr/bin/python3 -I /abs/contacts.py log {arg} sent
 tg action add contact --desc "контакт: Компания; Имя; @ник" -- /usr/bin/python3 -I /abs/contacts.py quick -- {arg}
+tg topic rm 98172 98175                  # удалить вкладки (с перепиской) и их записи в threads.json/sessions
 # action с {arg} и --desc = ещё и команда в меню бота: «/contact <текст>» отдаёт весь текст после команды в {arg}
 # (один элемент argv, без shell). Имя команды: [a-z0-9_]. Меню обновляется при старте демона.
 # --hint "пример" (≤64 симв.): «/contact» без текста присылает формат (вывод action с "help") с force_reply и этой

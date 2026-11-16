@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Чистка вкладок Telegram-бота (tg-bridge, Threaded Mode) по закрытым вакансиям.
+
+Вкладка автоотклика помечена kind="apply:<ключ очереди>" (threads.json). Её судьба — по трекеру:
+  closed    строка job_tracker найдена и E = «Закрыто»                       -> удалить
+  not-sent  в трекере нет, а в очереди skipped / bl-done (отклик не подавали)  -> удалить
+  open      строка в трекере открыта, или в очереди new/running/paused/failed -> оставить
+  unknown   отклик был, но строку в трекере не сопоставить                   -> оставить, показать
+Строка трекера ищется по ссылке из applications/q<ключ>-*/tracker-row.json (столбец I), затем по компании
+и должности из tracker-row.json или из заметки очереди («— Компания Должность»).
+
+  topics.py list               таблица вкладок и решение по каждой
+  topics.py clean [--dry-run]  удалить closed и not-sent (tg topic rm)
+  topics.py cleanup            для бота /cleanup: список + кнопка «Удалить N» (action topics-clean)
+  topics.py clean-go           то, что жмёт кнопка: удалить и коротко ответить
+"""
+import argparse, json, os, re, shutil, subprocess, sys, time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import status as S  # noqa: E402  (norm_url, norm_txt, read_tsv, fetch_sheet, cached_sheet)
+
+HOME = S.HOME
+TG_DATA = Path(os.environ.get("TG_BRIDGE_DATA", "~/.local/share/tg-bridge")).expanduser()
+QUEUE_NOT_SENT = {"skipped", "bl-done"}
+QUEUE_OPEN = {"new", "running", "in-progress", "paused", "failed", "bl-review"}
+
+
+def tg_bin():
+    return shutil.which("tg") or str(Path("~/.local/bin/tg").expanduser())
+
+
+def sheet_rows(max_age=900):
+    rows, ts = S.cached_sheet() if hasattr(S, "cached_sheet") else (None, 0)
+    if rows is None or time.time() - (ts or 0) > max_age:
+        try:
+            rows = S.fetch_sheet() or rows
+        except Exception as e:                                     # нет сети — работаем по кэшу
+            print(f"WARN: лист не обновлён ({e}); беру кэш", file=sys.stderr)
+    return rows or []
+
+
+def queue_rows():
+    return {r["key"]: r for r in S.read_tsv(HOME / "queue.tsv", header=True)}
+
+
+def app_info(key):
+    """tracker-row.json из папки автоотклика: {A,B,I,…} или {}."""
+    for d in sorted((HOME / "applications").glob(f"q{key.replace('.', '-')}-*")):
+        f = d / "tracker-row.json"
+        if f.exists():
+            try:
+                return json.loads(f.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
+    return {}
+
+
+def find_row(key, q, rows):
+    info = app_info(key)
+    urls = [S.norm_url(u) for u in re.split(r"\s*;\s*|\s+", info.get("I", "")) if u.startswith("http")]
+    for r in rows:
+        cell = r["values"][8] if len(r["values"]) > 8 else ""
+        if urls and any(S.norm_url(u) in urls for u in re.split(r"\s*;\s*|\s+", cell) if u):
+            return r
+    # компания + должность: из tracker-row.json, иначе из заметки очереди «— Компания Должность»
+    cands = []
+    if info.get("A") and info.get("B"):
+        cands.append((info["A"], info["B"]))
+    note = (q or {}).get("note", "")
+    qtitle = re.split(r"\s*\|\s*", (q or {}).get("title", ""))[0]
+    if not re.search(r"только hh|разведка|not_found|нет ответа", note):
+        m = re.search(r"—\s*([^|]+?)(?:\s*\||$)", note)            # «— Компания Должность»: компания 1–3 слова
+        if m:
+            w = m.group(1).split()
+            cands += [(" ".join(w[:k]), " ".join(w[k:])) for k in (1, 2, 3) if len(w) > k]
+        m = re.match(r"\s*([^:—]{2,40}):", note)                     # «Компания: отклик на hh …» + должность из очереди
+        if m and qtitle:
+            cands.append((m.group(1), qtitle))
+    qt = (q or {}).get("title", "")
+    m = re.match(r"^[^\w«\"(]*(.+?)\s+в\s+(.+?)\s*$", qt)          # «Должность в Компания»
+    if m:
+        cands.append((re.sub(r"^(ПАО|ООО|АО)\s+|[«»\"]", "", m.group(2)), m.group(1)))
+    for company, title in cands:
+        c, t = S.norm_txt(company)[:4], S.norm_txt(title)[:25]
+        for r in rows:
+            v = r["values"]
+            if c and t and c in S.norm_txt(v[0]) and t in S.norm_txt(v[1]):
+                return r
+    return None
+
+
+def decide():
+    rows, queue = sheet_rows(), queue_rows()
+    th = json.loads((TG_DATA / "threads.json").read_text()) if (TG_DATA / "threads.json").exists() else {}
+    out = []
+    for tid, t in th.items():
+        kind = t.get("kind", "")
+        if not kind.startswith("apply:"):
+            continue
+        key = kind.split(":", 1)[1]
+        q = queue.get(key)
+        r = find_row(key, q, rows)
+        qs = (q or {}).get("status", "")
+        if r:
+            e = r["values"][4] if len(r["values"]) > 4 else ""
+            verdict = "closed" if e == "Закрыто" else "open"
+            why = f"трекер #{r['row']}: {e or '—'}"
+        elif qs in QUEUE_NOT_SENT:
+            verdict, why = "not-sent", f"очередь: {qs}, в трекере нет"
+        elif qs in QUEUE_OPEN:
+            verdict, why = "open", f"очередь: {qs}"
+        else:
+            verdict, why = "unknown", f"очередь: {qs or 'нет записи'}, строка трекера не найдена"
+        out.append(dict(tid=tid, key=key, name=t.get("name", ""), verdict=verdict, why=why))
+    return out
+
+
+def fmt(items):
+    mark = {"closed": "✖", "not-sent": "✖", "open": "·", "unknown": "?"}
+    return "\n".join(f"{mark[i['verdict']]} {i['name'][:60]} — {i['why']}" for i in items)
+
+
+def cmd_list(a):
+    items = decide()
+    print(fmt(items) or "вкладок автооткликов нет")
+
+
+def remove(items):
+    ids = [i["tid"] for i in items]
+    if not ids:
+        return 0, "удалять нечего"
+    p = subprocess.run([tg_bin(), "topic", "rm", *ids], capture_output=True, text=True)
+    return p.returncode, (p.stdout + p.stderr).strip()
+
+
+def gone(items):
+    return [i for i in items if i["verdict"] in ("closed", "not-sent")]
+
+
+def cmd_clean(a):
+    items = gone(decide())
+    if a.dry_run:
+        print(fmt(items) or "удалять нечего")
+        return
+    rc, out = remove(items)
+    print(out)
+    sys.exit(rc)
+
+
+def cmd_cleanup(a):
+    """/cleanup: показать, что удалится, и кнопку подтверждения (ничего не удаляет сам)."""
+    items = decide()
+    g, keep = gone(items), [i for i in items if i["verdict"] == "unknown"]
+    if not g:
+        print("Удалять нечего: закрытых вакансий среди вкладок нет."
+              + (f"\nНе сопоставлены с трекером ({len(keep)}):\n" + fmt(keep) if keep else ""))
+        return
+    text = f"Удалю вкладки ({len(g)}) вместе с перепиской в них:\n{fmt(g)}"
+    if keep:
+        text += f"\n\nОставлю, не нашёл в трекере ({len(keep)}):\n{fmt(keep)}"
+    p = subprocess.run([tg_bin(), "send", text[:3900], "--button", f"Удалить {len(g)}=topics-clean:go",
+                        "--cols", "1"], capture_output=True, text=True)
+    print("Список и кнопка — следующим сообщением." if p.returncode == 0 else f"ERR tg send: {p.stderr.strip()}")
+
+
+def cmd_clean_go(a):
+    items = gone(decide())                                         # пересчёт на момент нажатия
+    rc, out = remove(items)
+    n = sum(1 for l in out.splitlines() if l.startswith(("удалена", "не найдена")))
+    print(f"Удалено вкладок: {n}" if rc == 0 else f"Часть не удалилась:\n{out[-800:]}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    sp.add_parser("list").set_defaults(f=cmd_list)
+    c = sp.add_parser("clean"); c.add_argument("--dry-run", action="store_true"); c.set_defaults(f=cmd_clean)
+    sp.add_parser("cleanup").set_defaults(f=cmd_cleanup)
+    g = sp.add_parser("clean-go"); g.add_argument("arg", nargs="?"); g.set_defaults(f=cmd_clean_go)
+    a = ap.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

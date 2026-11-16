@@ -117,6 +117,11 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
   The worker runs `claude -p` per item with the rules in [references/auto-apply.md](references/auto-apply.md):
   the same flow and gates, but every question goes to Telegram and a timeout means `paused`. `python3 -I scripts/queue.py list`
   shows what is waiting. `worker.sh <key>` resumes a paused item after the user did the step at the laptop.
+  Each queue item has its own bot topic (kind `apply:<key>`). `scripts/topics.py` removes topics whose tracker row
+  is «Закрыто» or whose queue item was never sent (skipped / bl-done): daily timer `job-apply-topics` (21:47) and
+  `/cleanup` in the bot (list first, then a «Удалить N» button). `topics.py list` shows the decision per topic.
+  When you apply to a queue item by hand, copy its `tracker-row.json` into `applications/q<key>-*/` so the topic
+  can be matched to its tracker row.
   Skip-the-gate only for sites the user put under `no_confirm:` in `~/.config/job-apply/auto.yaml`.
 - After a successful submit, append a line to `~/.local/share/job-apply/applied.tsv`
   (`date<TAB>company<TAB>title<TAB>url<TAB>resume<TAB>status`) and add a row to the job_tracker
