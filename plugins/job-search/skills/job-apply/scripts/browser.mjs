@@ -297,7 +297,9 @@ const cmds = {
     if (searchable) await type(text);
     // все выпадашки Ant Design живут в DOM — берём только список этого поля
     const id = await input.getAttribute('id');
-    const opts = page.locator(`.ant-select-dropdown:has([id="${id}_list"]) .ant-select-item-option`);
+    // открытый (видимый) список — его; по id_list бывает чужой: закрытые списки других полей остаются в DOM
+    const vis = page.locator('.ant-select-dropdown:visible .ant-select-item-option');
+    const opts = (await vis.count()) ? vis : page.locator(`.ant-select-dropdown:has([id="${id}_list"]) .ant-select-item-option`);
     await opts.first().waitFor({ timeout: 10000 });
     // точный пункт — по title или по тексту целиком («Москва», а не «Москва (деревня)» / «Новая Москва»)
     const esc = text.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
