@@ -8,7 +8,8 @@
    Сайт в ~/.config/job-apply/auto.yaml no_confirm — без вопроса, но скрин и PDF всё равно уходят в чат.
 3. «отправить» → токен в $JOB_APPLY_HOME/gate/$JOB_APPLY_RUN.token, stdout «TOKEN: <t>» (exit 0).
    Им и только им browser.mjs нажмёт кнопку отправки: `click <ref> --token <t>`. Токен одноразовый.
-   «правка» → stdout «EDIT: <что поправить>» (exit 4). «стоп» → exit 5. Нет ответа → exit 2.
+   «правка» → stdout «EDIT: <что поправить>» (exit 4). «стоп» → exit 5. Нет ответа → exit 2,
+   а с `on_timeout: send` в auto.yaml — отправка (в вопросе и отдельным сообщением об этом сказано).
 """
 import json, os, re, secrets, subprocess, sys
 from pathlib import Path
@@ -31,6 +32,12 @@ def no_confirm(url):
     hosts = [h.strip().strip("'\"") for h in (m.group(1).split(",") if m else []) if h.strip()]
     host = urlparse(url or "").hostname or ""
     return any(host == h or host.endswith("." + h) for h in hosts)
+
+
+def send_on_timeout():
+    """auto.yaml: on_timeout: send — нет ответа на подтверждение за таймаут → отправить (решение пользователя)."""
+    f = CONF / "auto.yaml"
+    return f.exists() and re.search(r"^on_timeout:\s*send\b", f.read_text(), re.M) is not None
 
 
 def summary(plan):
@@ -75,10 +82,18 @@ def main():
         tg("send", "Отправляю без вопроса (сайт в no_confirm):\n\n" + text[:900], "--photo", str(shot))
         answer = "отправить"
     else:
-        r = tg("ask", text[:1000], "--photo", str(shot), "--buttons", "отправить,правка,стоп", "--timeout", timeout)
+        auto = send_on_timeout()
+        ask = text[:900] + (f"\n\nНет ответа {int(timeout) // 60} мин — отправлю сам." if auto else "")
+        r = tg("ask", ask, "--photo", str(shot), "--buttons", "отправить,правка,стоп", "--timeout", timeout)
         if r.returncode == 2:
-            sys.exit(2)
-        answer = r.stdout.strip()
+            if not auto:
+                sys.exit(2)
+            # молчание = согласие (auto.yaml on_timeout: send); форма уже сверена с планом выше
+            tg("send", f"Отправляю без ответа (таймаут {int(timeout) // 60} мин): {plan.get('company', '?')} — "
+                       f"{plan.get('title', '?')}")
+            answer = "отправить"
+        else:
+            answer = r.stdout.strip()
 
     if answer == "отправить":
         tok = secrets.token_hex(8)
