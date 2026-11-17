@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """RSS (RSSHub/Telegram и любые ленты) -> фильтр по ключевым словам -> дайджест в папку Mail.ru.
 
-  digest.py run [--dry-run] [--force] [--tg]   # забрать ленты, дайджест в почту (+ каждый пост в Telegram)
+  digest.py run [--dry-run] [--force] [--tg] [--hh-days N]   # ленты + поиск hh (hh.txt) → почта (+ Telegram)
   digest.py show [--days N] [--all]     # вывести найденное из локальной базы
   digest.py feeds                       # проверить, что ленты отвечают
   digest.py tg <id>...                  # (пере)прислать посты в Telegram с кнопками
@@ -15,7 +15,7 @@ Telegram: команда `tg` из плагина tg-bridge. Кнопки — tg
 Состояние: $JOB_DIGEST_STATE (по умолчанию ~/.local/state/job-digest/items.db)
 Почта:   MAILRU_USER, MAILRU_APPPASS (пароль для внешних приложений), JOB_DIGEST_FOLDER (Вакансии)
 """
-import argparse, base64, datetime as dt, email.utils, html, imaplib, os, re, shutil, sqlite3, subprocess, sys, time
+import argparse, base64, datetime as dt, email.utils, html, imaplib, json, os, re, shutil, sqlite3, subprocess, sys, time
 import urllib.request, xml.etree.ElementTree as ET
 from email.message import EmailMessage
 from pathlib import Path
@@ -149,6 +149,109 @@ def hits(h, patterns):
     return out
 
 
+# --- hh.ru: поиск как источник (вместо агрегаторов) ---
+# ~/.config/job-digest/hh.txt: запрос на строку, опц. `| days=1 area=1 exp=noExperience`.
+# Поиск идёт через браузер job-apply (залогинен на hh) — `job-apply/scripts/hh.mjs search`.
+HH_SCRIPTS = Path(__file__).resolve().parents[2] / "job-apply" / "scripts"
+HH_BATCH = 8                                                       # вакансий в одном сообщении (кнопки 1–8)
+HH_EXP = {"without experience": "без опыта", "1–3 years": "опыт 1–3 года", "1-3 years": "опыт 1–3 года",
+          "3–6 years": "опыт 3–6 лет", "more than 6 years": "опыт 6+ лет"}
+
+
+def hh_queries():
+    p = CONF / "hh.txt"
+    if not p.exists():
+        return []
+    out = []
+    for l in read_list("hh.txt"):
+        q, _, opts = l.partition("|")
+        kv = dict(x.split("=", 1) for x in opts.split() if "=" in x)
+        out.append((q.strip(), kv))
+    return out
+
+
+def applied_index():
+    """Куда уже откликались: ссылки и «компания+должность» из applied.tsv / history.tsv."""
+    urls, pairs = set(), set()
+    norm = lambda x: re.sub(r"[^0-9a-zа-яё]+", " ", (x or "").lower()).strip()
+    for f in ("applied.tsv", "history.tsv"):
+        fp = APPLY_HOME / f
+        if not fp.exists():
+            continue
+        for l in fp.read_text(encoding="utf-8").splitlines():
+            x = l.split("\t")
+            if len(x) >= 4:
+                urls.add(x[3].strip())
+                pairs.add((norm(x[1]).split(" ")[0], norm(x[2])[:30]))
+    return urls, pairs, norm
+
+
+def hh_fetch(q, kv):
+    env = dict(os.environ)
+    subprocess.run(["node", str(HH_SCRIPTS / "browser.mjs"), "start", "--offscreen"], cwd=HH_SCRIPTS,
+                   env=env, capture_output=True, timeout=120)
+    cmd = ["node", str(HH_SCRIPTS / "hh.mjs"), "search", "--text", q, "--days", kv.get("days", "1"),
+           "--area", kv.get("area", "1"), "--exp", kv.get("exp", "noExperience")]
+    r = subprocess.run(cmd, cwd=HH_SCRIPTS, env=env, capture_output=True, text=True, timeout=600)
+    if r.returncode:
+        raise RuntimeError((r.stderr or r.stdout).strip()[-300:])
+    return json.loads(r.stdout or "[]")
+
+
+def hh_source(c, now, patterns, dry_run=False, days=None):
+    """Новые вакансии hh по запросам → пачки по HH_BATCH как «посты» (matched=3). Каждая вакансия помнится
+    по guid hh:<id>, поэтому завтра не повторится. -> (найдено подходящих, ошибок)"""
+    queries = hh_queries()
+    if not queries:
+        return 0, 0
+    inc, exc, level, topic = patterns
+    urls, pairs, norm = applied_index()
+    fresh, errors, seen = [], 0, set()
+    for q, kv in queries:
+        try:
+            vs = hh_fetch(q, {**kv, "days": str(days)} if days else kv)
+        except Exception as e:
+            print(f"WARN: hh «{q}»: {e}", file=sys.stderr)
+            errors += 1
+            continue
+        for v in vs:
+            if v["id"] in seen:
+                continue
+            seen.add(v["id"])
+            addr = re.sub(r"\bMoscow\b", "Москва", v.get("address", ""))
+            e = re.sub(r"^experience\s+", "", v.get("exp", "").lower()).replace("-", "–")
+            exp = HH_EXP.get(e, v.get("exp", ""))
+            text, det = f'{v["title"]} — {v["employer"]}', " | ".join(x for x in (exp, addr) if x)
+            if v.get("applied") or v["url"] in urls \
+                    or (norm(v["employer"]).split(" ")[0], norm(v["title"])[:30]) in pairs:
+                continue
+            if not any(p.search(v["title"]) for p in topic) or any(p.search(f"{text} {det}") for p in exc):
+                continue
+            if dry_run:
+                if c.execute("select 1 from items where guid=?", (f'hh:{v["id"]}',)).fetchone():
+                    continue
+            else:
+                cur = c.execute("insert or ignore into items(guid, feed, title, link, html, pub, matched, fetched_at, sent_at)"
+                                " values(?,?,?,?,?,?,?,?,?)",
+                                (f'hh:{v["id"]}', "hh.ru", text, v["url"], "", now, 0, now, now))
+                if not cur.rowcount:
+                    continue
+            fresh.append((text, v["url"], det))
+    for k in range(0, len(fresh), HH_BATCH):
+        part = fresh[k:k + HH_BATCH]
+        body = "<br>".join(f'<a href="{html.escape(u)}">{html.escape(t)}</a><br>{html.escape(d)}' for t, u, d in part)
+        row = (f"hh-batch:{now}:{k // HH_BATCH}", "hh.ru", f"hh.ru: {len(part)} вакансий", part[0][1], body, now, 3, now, None)
+        if dry_run:
+            print("--- hh ---\n" + "\n".join(f"{t} | {d} | {u}" for t, u, d in part))
+        else:
+            c.execute("insert or ignore into items(guid, feed, title, link, html, pub, matched, fetched_at, sent_at)"
+                      " values(?,?,?,?,?,?,?,?,?)", row)
+    if not dry_run:
+        c.commit()
+    print(f"hh: запросов {len(queries)}, новых подходящих {len(fresh)}" + (f", ошибок {errors}" if errors else ""))
+    return len(fresh), errors
+
+
 # --- база ---
 
 def db():
@@ -182,6 +285,9 @@ def imap_utf7(s):
 
 
 def post_hits(r, patterns):
+    if r["matched"] == 3:                                          # пачка вакансий из поиска hh (hh_source)
+        return [(html.unescape(t), html.unescape(h), html.unescape(d))
+                for h, t, d in re.findall(r'<a href="([^"]+)">(.*?)</a><br>([^<]*)', r["html"])]
     return strict_hits(r, patterns) if r["matched"] == 2 else hits(r["html"], patterns)
 
 
@@ -275,7 +381,8 @@ def cmd_run(a):
                              now if skip else None))
             new += cur.rowcount
     c.commit()
-    if feeds and len(failed) == len(feeds):
+    _, hh_err = hh_source(c, now, patterns, a.dry_run, getattr(a, "hh_days", None))
+    if feeds and len(failed) == len(feeds) and (not hh_queries() or hh_err == len(hh_queries())):
         all_feeds_down(len(feeds), a)                            # выходит с 75 → systemd повторит
 
     rows = [dict(zip(COLS, r)) for r in c.execute(
@@ -476,6 +583,7 @@ def main():
     r.add_argument("--dry-run", action="store_true", help="напечатать дайджест, не отправлять и не помечать")
     r.add_argument("--force", action="store_true", help="отправить, даже если подходящих нет")
     r.add_argument("--tg", action="store_true", help="ещё и каждый подходящий пост в Telegram с кнопками")
+    r.add_argument("--hh-days", type=int, help="hh: глубина поиска в днях вместо days из hh.txt (первый прогон — 7)")
     s = sp.add_parser("show")
     s.add_argument("--days", type=int, default=7)
     s.add_argument("--all", action="store_true", help="включая не прошедшие фильтр")

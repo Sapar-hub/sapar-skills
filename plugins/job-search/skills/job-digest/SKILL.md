@@ -11,6 +11,7 @@ Pipeline: `feeds.txt` → RSSHub (`127.0.0.1:1200`, docker) → `scripts/digest.
 
 Files:
 - config: `~/.config/job-digest/feeds.txt`, `keywords.txt` (regexes, one per line)
+- hh.ru search as a source: `~/.config/job-digest/hh.txt` (one query per line, optional `| days=1 area=1 exp=noExperience`). Runs `job-apply/scripts/hh.mjs search` in the job-apply browser (logged in, offscreen), keeps titles that pass the keywords.txt direction and exclusions, drops vacancies already applied to (applied.tsv/history.tsv, «You applied») and ones seen before (guid `hh:<id>`), and posts them in batches of 8 with the usual buttons. `run --hh-days 7` widens the window once (first run). If all feeds AND hh fail, the run exits 75 and systemd retries every 40 min; one TG alert a day.
 - state: `~/.local/state/job-digest/items.db` (every item seen, `sent_at` once mailed)
 - credentials: `MAILRU_USER`, `MAILRU_APPPASS` (Mail.ru app password) from the
   environment (fish universal vars on the author's machine) or `~/.config/job-digest/env`.
