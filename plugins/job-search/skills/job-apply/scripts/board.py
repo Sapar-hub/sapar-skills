@@ -23,8 +23,11 @@ CONTACT_STATUS = {"new": "не писал", "contacted": "писал", "replied"
                   "skip": "пропуск"}
 
 
+EMOJI = re.compile(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u20E3]+")
+
+
 def short(s, n):
-    s = re.sub(r"\s+", " ", s or "").strip()
+    s = re.sub(r"\s+", " ", EMOJI.sub("", s or "")).strip()
     return s if len(s) <= n else s[:n - 1].rstrip() + "…"
 
 

@@ -139,8 +139,12 @@ def decide():
     return out
 
 
+EMOJI = re.compile(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u20E3]+")
+
+
 def fmt(items):
-    return "\n".join(f"{i['name'][:60]} — {i['why']}" for i in items)
+    """Названия вкладок — из постов каналов, там бывают эмодзи («5️⃣ аналитик…»); в списке бота их не надо."""
+    return "\n".join(f"{re.sub(r'^[\s\d]*(?=\s)', '', EMOJI.sub('', i['name'])).strip()[:60]} — {i['why']}" for i in items)
 
 
 def cmd_list(a):
