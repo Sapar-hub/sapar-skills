@@ -46,8 +46,18 @@ const SNAP_JS = (prefix) => {
     const r = el.getBoundingClientRect(), s = getComputedStyle(el);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
   };
+  // текст рядом с галочкой: value «on» — не подпись; поднимаемся к ближайшему предку с текстом
+  const near = (el) => {
+    let n = el;
+    for (let i = 0; i < 4 && n.parentElement; i++) { n = n.parentElement; const t = clean(n.innerText); if (t) return t; }
+    return '';
+  };
   const label = (el) => {
     const by = el.getAttribute('aria-labelledby');
+    const box = ['checkbox', 'radio'].includes((el.getAttribute('type') || '').toLowerCase());
+    if (box) return clean(el.getAttribute('aria-label') ||
+      (by && by.split(' ').map((id) => document.getElementById(id)?.innerText).join(' ')) ||
+      (el.labels && el.labels[0]?.innerText) || el.closest('label')?.innerText || near(el) || el.getAttribute('name'));
     return clean(el.getAttribute('aria-label') ||
       (by && by.split(' ').map((id) => document.getElementById(id)?.innerText).join(' ')) ||
       (el.labels && el.labels[0]?.innerText) || el.closest('label')?.innerText ||

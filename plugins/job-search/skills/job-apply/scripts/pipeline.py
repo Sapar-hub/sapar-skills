@@ -174,7 +174,7 @@ RECON = """Ты исполнитель. Разведка вакансии для
   {B} goto <url> | text 8000 | snap | click <ref> | live <url> | press Enter | fill <ref> <текст>
   node {H}/precheck.mjs --company '<компания>' --title '<должность>' --url '<url>'
 Вакансия из дайджеста: «{title}» ({details}). Ссылка агрегатора: {href}. Пост: {post}.
-{post_text}
+{post_text}{hints}
 1. Найди ЭТУ вакансию на сайте САМОГО работодателя (карьерный сайт компании; поиск на нём — через fill+press Enter).
    Агрегаторы (changellenge, youngjunior, hirify, hh) — только чтобы узнать компанию и название.
 2. {B} live <url> и precheck.
@@ -207,7 +207,7 @@ PLAN = """Скилл job-apply, этап ПЛАН конвейера (брауз
                 {{"label": "...", "upload": "<абсолютный путь PDF>"}}, {{"label": "...", "check": true}},
                 {{"label": "...", "select": "<пункт>"}}]}}
    Каждое заполняемое поле формы — ровно один пункт, значения дословные (телефон — как в профиле). Поля, которые
-   не нужны, не включай. Нет данных для обязательного поля — спроси: tg ask "<вопрос>" --text (или --buttons).
+   не нужны, не включай. Галочки — только обязательные (*) согласия; рассылки/рекламу/подписки не отмечай. Нет данных для обязательного поля — спроси: tg ask "<вопрос>" --text (или --buttons).
 3. {appdir}/tracker-row.json: {{"A": компания, "B": должность, "C": "{today}", "D": "Отклик", "E": "Ожидание ответа",
    "F": "<+3 раб. дня: что дальше>", "G": "Уточнить", "H": "<заметки>", "I": url, "J": "<папка/PDF>",
    "K": "<сопроводительное>", "L": "<все поля формы: значения>", "M": "<источник: {feed} → сайт работодателя>", "N": ""}}
@@ -293,6 +293,30 @@ def handoff(appdir, why):
     return "manual", f"{why}; значения в {appdir.name}/manual.md и в TG"
 
 
+def recon_hints(appdir):
+    """Что уже известно: ссылка, найденная прошлой разведкой этой вакансии, и карьерные сайты компаний из прошлых
+    откликов (applied.tsv) — чтобы не перебирать job./career./hr. наугад."""
+    out = []
+    prev = appdir / "vacancy.md"
+    if prev.exists():
+        m = re.search(r"^RECON: (?:ok|hh) (\S+)", prev.read_text(encoding="utf-8"), re.M)
+        if m:
+            out.append(f"Прошлая разведка ЭТОЙ вакансии нашла её здесь: {m.group(1)} — начни с этой ссылки.")
+    sites = {}
+    applied = HOME / "applied.tsv"
+    if applied.exists():
+        from urllib.parse import urlparse
+        for line in applied.read_text(encoding="utf-8").splitlines():
+            f = line.split("\t")
+            if len(f) > 3 and f[3].startswith("http") and "hh.ru" not in f[3]:
+                h = urlparse(f[3]).hostname or ""
+                if h and not re.search(r"changellenge|youngjunior|hirify|t\.me|habr", h):
+                    sites.setdefault(f[1].strip(), h)
+    if sites:
+        out.append("Карьерные сайты компаний из прошлых откликов: " + "; ".join(f"{c} — {h}" for c, h in list(sites.items())[-40:]))
+    return ("\n" + "\n".join(out)) if out else ""
+
+
 def post_text(q):
     """Текст поста канала из базы дайджеста — t.me из браузера часто не грузится, а текст у нас уже есть."""
     try:
@@ -331,7 +355,7 @@ def run(key):
         sh(f"{B} goto https://hh.ru/applicant/vacancy_response?vacancyId={m.group(1)}")
         out, r = "", f"hh https://hh.ru/vacancy/{m.group(1)} | {q['details'].split(':', 1)[-1].strip()}"
     else:
-        out = executor(RECON.format(B=B, H=HERE, post_text=post_text(q), **q), logs / "1-recon")
+        out = executor(RECON.format(B=B, H=HERE, post_text=post_text(q), hints=recon_hints(appdir), **q), logs / "1-recon")
         r = last_line(out, "RECON")
     channel = "hh" if r.startswith("hh ") else "site"             # hh: форма отклика hh, тот же конвейер
     if not (r.startswith("ok") or channel == "hh"):
