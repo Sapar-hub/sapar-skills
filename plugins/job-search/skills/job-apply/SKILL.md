@@ -1,6 +1,6 @@
 ---
 name: job-apply
-description: Use this skill when the user wants to apply to a vacancy or internship — «подайся», «откликнись на …», «заполни анкету Ozon/Сбер/…», or picks a vacancy from the job digest. It drives a real Chromium (persistent profile, user's logins) through `scripts/browser.mjs`: the agent reads the page as text, fills the company's own application form from the user's profile and attaches the right resume. Apply on the employer's own career site, and additionally on hh.ru when the vacancy is there too (`scripts/hh.mjs sync` first rewrites the track's hh resume from the tailored file); never through other aggregators or middlemen.
+description: Use this skill when the user wants to apply to a vacancy or internship — «подайся», «откликнись на …», «заполни анкету Ozon/Сбер/…», or picks a vacancy from the job digest. It drives a real Chromium (persistent profile, user's logins) through `scripts/browser.mjs`: the agent reads the page as text, fills the company's own application form from the user's profile and attaches the right resume. Apply on the employer's own career site, and additionally on hh.ru when the vacancy is there too (`scripts/hh.mjs sync` first rewrites the track's hh resume from the tailored file); never through other aggregators or middlemen, unless the middleman is the official organizer of the program and the employer has no form of its own.
 ---
 
 # job-apply
@@ -43,7 +43,11 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
 - **Employer's site first.** From a digest link (Changellenge, a Telegram post) go
   to the company's career site: search the vacancy title there (e.g.
   career.ozon.ru, sberbank.ru/careers, career.avito.com) and apply there. Aggregators and middlemen
-  (Changellenge forms, youngjunior «Автоотклики», hirify) are never used to apply.
+  (Changellenge forms, youngjunior «Автоотклики», hirify) are not used to apply — except when the
+  middleman is the official organizer of the program and the employer has no form of its own: e.g. an
+  internship program Changellenge runs for Mindbox and publishes on hh under «Changellenge». Then apply
+  where the organizer takes applications (its hh vacancy first, its own form otherwise); say so in the
+  tracker row (H: «через организатора программы: <кто>»). (Сапар, 17.11.)
 - **hh.ru: facts, and a second channel.** The browser profile is logged in to the user's hh account (applicant).
   - Facts: find the same vacancy on hh (`https://hh.ru/search/vacancy?text=<title> <company>`) and read with
     `text`: salary range, required experience, schedule/format, publication date, archived or not.

@@ -206,7 +206,12 @@ async function find(title, company) {
     const GENERIC = new Set(['стажер', 'стажёр', 'стажировка', 'junior', 'младший', 'начинающий', 'intern', 'internship',
       'специалист', 'senior', 'middle', 'ведущий', 'старший', 'команда', 'команду', 'отдел', 'управление', 'группа']);
     const words = norm(title).split(' ').filter((w) => w.length > 2 && !GENERIC.has(w));
-    const scored = cards.filter((c) => !seen.has(c.id) && seen.add(c.id)).map((c) => {
+    // уровень должен совпадать: «Стажер LLM-researcher» ≠ «Middle LLM Researcher»
+    const level = (t) => (/стаж|intern|junior|джуниор|младш|начинающ/i.test(t) ? 'junior'
+      : /middle|мидл|senior|сеньор|ведущ|старш|lead|лид|главн|руковод|head/i.test(t) ? 'senior' : '');
+    const want = level(title);
+    const scored = cards.filter((c) => !seen.has(c.id) && seen.add(c.id))
+      .filter((c) => !want || !level(c.title) || level(c.title) === want).map((c) => {
       const ne = norm(c.employer), nt = norm(c.title);
       const emp = nc && (ne.includes(nc) || nc.includes(ne) || (firstWord.length > 2 && ne.includes(firstWord)));
       const hit = words.filter((w) => nt.includes(w)).length / Math.max(words.length, 1);
