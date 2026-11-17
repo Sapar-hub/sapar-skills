@@ -3,9 +3,10 @@
 
   claude -p … --output-format stream-json --verbose | tg progress --title "<что делаем>" --log <file>
       [--freeform] [--session-file F] [--reply-to MESSAGE_ID]
+  opencode run --format json … | tg progress … --source opencode
 
 --freeform      итог без строки STATUS: (задачи из чата): успех = прогон без ошибки
---session-file  сюда пишется session_id (для --resume следующей задачи)
+--session-file  сюда пишется {"engine", "id"} сессии (для --resume / --session следующей задачи)
 --reply-to      статус — ответом на сообщение пользователя с задачей
 
 - stdin: события stream-json; каждое пишется в --log как есть.
@@ -53,6 +54,21 @@ def step_of(block):
     return name.replace("mcp__claude_ai_", "").replace("__", ": ")
 
 
+OC_TOOL = {"shell": "Bash", "bash": "Bash", "read": "Read", "edit": "Edit", "write": "Write", "glob": "Glob",
+           "grep": "Grep", "webfetch": "WebFetch", "websearch": "WebSearch", "skill": "Skill", "list": "Glob"}
+
+
+def oc_block(part):
+    """tool_use OpenCode → блок в форме Claude для step_of: {name, input}."""
+    tool, inp = part.get("tool", ""), (part.get("state") or {}).get("input") or {}
+    name = OC_TOOL.get(tool, tool)
+    norm = {"command": inp.get("command", ""), "description": inp.get("description", ""),
+            "file_path": inp.get("filePath") or inp.get("file_path") or inp.get("path", ""),
+            "url": inp.get("url", ""), "query": inp.get("query", ""),
+            "skill": inp.get("name") or inp.get("skill") or inp.get("id", ""), "pattern": inp.get("pattern", "")}
+    return {"name": name, "input": norm}
+
+
 def plain(md):
     """Markdown агента → обычный текст (без **, `, заголовков)."""
     t = re.sub(r"\*\*(.+?)\*\*", r"\1", md)
@@ -72,9 +88,12 @@ def main():
     ap.add_argument("--freeform", action="store_true")
     ap.add_argument("--session-file")
     ap.add_argument("--reply-to")
+    ap.add_argument("--source", default="claude", choices=["claude", "opencode"],
+                    help="формат событий: claude (stream-json) или opencode (run --format json)")
     a = ap.parse_args()
     log = open(a.log, "w", encoding="utf-8")
     t0, steps, last_edit, result = time.time(), [], 0.0, None
+    last_sid, oc_text, oc_error = None, [], None
     title = f"<b>{html.escape(a.title)}</b>\n" if a.title else ""
     mid = tg("send", "--html", f"{title}запуск", *(["--reply-to", a.reply_to] if a.reply_to else []))
 
@@ -90,9 +109,20 @@ def main():
             ev = json.loads(raw)
         except json.JSONDecodeError:
             continue
-        if ev.get("session_id") and a.session_file:
-            Path(a.session_file).write_text(ev["session_id"])
-        if ev.get("type") == "assistant":
+        sid = ev.get("session_id") or ev.get("sessionID")
+        if sid and a.session_file and sid != last_sid:             # {"engine", "id"}: чужой id другому движку не уйдёт
+            Path(a.session_file).write_text(json.dumps({"engine": a.source, "id": sid}))
+            last_sid = sid
+        if a.source == "opencode":
+            # итога-события нет: ответ — последний текст, ошибка — событие error / step_finish с reason=error
+            t = ev.get("type")
+            if t == "tool_use":
+                steps.append(step_of(oc_block(ev.get("part") or {})))
+            elif t == "text":
+                oc_text.append((ev.get("part") or {}).get("text", ""))
+            elif t == "error" or (t == "step_finish" and (ev.get("part") or {}).get("reason") == "error"):
+                oc_error = json.dumps(ev.get("error") or ev.get("part"), ensure_ascii=False)[:500]
+        elif ev.get("type") == "assistant":
             for b in (ev.get("message") or {}).get("content") or []:
                 if b.get("type") == "tool_use":
                     steps.append(step_of(b))
@@ -102,6 +132,10 @@ def main():
             tg("edit", mid, "--html", render())
             last_edit = time.time()
 
+    if a.source == "opencode":                                    # собрать итог в форме Claude-«result»
+        body = (oc_text[-1] if oc_text else "").strip()
+        result = {"result": body or (f"ошибка OpenCode: {oc_error}" if oc_error else ""),
+                  "is_error": bool(oc_error) and not body} if (oc_text or oc_error) else None
     text = (result or {}).get("result") or ""
     m = re.search(r"^STATUS: (\w[\w-]*)\s*(?:—\s*(.*))?$", text, re.M)
     status = m.group(1) if m else ("done" if a.freeform and result else "failed")

@@ -537,7 +537,7 @@ HELP = """Одна вкладка = одна задача со своим кон
 /status — что идёт и что в очереди
 /stop — прервать текущий прогон
 /inbox — непрочитанное"""
-COMMANDS = [("help", "все команды с примерами"), ("new", "задача в отдельной вкладке: /new текст"), ("reset", "забыть контекст этого чата/вкладки"), ("status", "что идёт и что в очереди"), ("stop", "прервать прогон"),
+COMMANDS = [("help", "все команды с примерами"), ("new", "задача в отдельной вкладке: /new текст"), ("reset", "забыть контекст этого чата/вкладки"), ("status", "что идёт и что в очереди"), ("stop", "прервать прогон"), ("engine", "движок задач: claude или opencode (запасной)"),
             ("inbox", "непрочитанное")]
 
 
@@ -617,6 +617,23 @@ def auto_topic(api, msg):
     return None
 
 
+def kill_group(pgid, grace=5):
+    """SIGTERM группе задачи, через grace с — SIGKILL, если жива (OpenCode со своим сервером гаснет секунды)."""
+    import signal
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except OSError:
+        return
+
+    def finish():
+        time.sleep(grace)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+    __import__("threading").Thread(target=finish, daemon=False).start()
+
+
 def command(api, me, msg, text):
     # команда из «All»: отвечаем в «Пульт», а пустую автовкладку убираем — не плодим вкладку на каждую команду
     stray = auto_topic(api, msg)
@@ -674,15 +691,29 @@ def command_in(api, me, msg, text):
                 "сессию (agent.json \"general\": \"single\"), а внутри вкладки — в её сессию.")
         else:
             enqueue_task(api, me, msg, rest, thread=None, new_tab=True)
+    elif name == "engine":
+        # движок задач из чата (agent.json "engine"): claude ↔ opencode; раннер подхватит со следующей задачи
+        f = CONF / "agent.json"
+        cfg = json.loads(f.read_text()) if f.exists() else {}
+        want = (text.split(None, 1)[1].strip().lower() if len(text.split(None, 1)) > 1 else "")
+        if want in ("claude", "opencode"):
+            if want == "opencode" and not cfg.get("opencode"):
+                say("Запасной движок не настроен: в agent.json нет секции opencode.")
+            else:
+                cfg["engine"] = want
+                write_atomic(f, json.dumps(cfg, ensure_ascii=False, indent=1))
+                say(f"Движок задач: {want}" + (f" ({cfg['opencode'].get('model', '')})" if want == "opencode" else "")
+                    + ". Со следующей задачи; сессии у движков свои.")
+        else:
+            cur = cfg.get("engine", "claude")
+            say(f"Сейчас: {cur}. Переключить: /engine claude | /engine opencode")
     elif name == "stop":
         import signal
         here = msg_thread(msg)
         victims = [r for r in running() if here is None or r.get("thread") == here]   # во вкладке — только её задачу
         for r in victims:
-            try:
-                os.killpg(r["pgid"], signal.SIGTERM)
-            except (OSError, KeyError):
-                pass
+            if r.get("pgid"):
+                kill_group(r["pgid"])
         say(f"Остановлено: {len(victims)}. Очередь сохранена: /status." if victims else "Здесь ничего не идёт.")
     elif name == "status":
         tasks = sorted(d("tasks", "x").parent.glob("*.json"))

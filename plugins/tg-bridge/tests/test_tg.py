@@ -322,5 +322,70 @@ class DeepLink(unittest.TestCase):
         tg.route(api, msg(42, "/start"))
         self.assertEqual(tg.route(api, msg(42, "/start nope__1")), "cmd:start?nope")
 
+
+def load_mod(name):
+    spec = importlib.util.spec_from_file_location(name, HERE.parent / "scripts" / f"{name}.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+class Engines(unittest.TestCase):
+    def setUp(self):
+        tmp = Path(tempfile.mkdtemp())
+        os.environ["TG_BRIDGE_CONFIG"], os.environ["TG_BRIDGE_DATA"] = str(tmp / "conf"), str(tmp / "data")
+        self.tmp, self.agent, self.progress = tmp, load_mod("agent"), load_mod("progress")
+
+    def test_opencode_steps_readable(self):
+        so = self.progress.step_of
+        b = self.progress.oc_block({"tool": "shell", "state": {"input": {"command": "tg send hi"}}})
+        self.assertEqual(so(b), "сообщение тебе в чат")
+        b = self.progress.oc_block({"tool": "read", "state": {"input": {"filePath": "/a/b/notes.md"}}})
+        self.assertEqual(so(b), "читаю notes.md")
+        b = self.progress.oc_block({"tool": "skill", "state": {"input": {"name": "job-apply"}}})
+        self.assertEqual(so(b), "скилл job-apply")
+
+    def test_session_is_engine_scoped(self):
+        f = self.tmp / "sess"
+        f.write_text("old-claude-id")                               # старый формат = claude
+        self.assertEqual(self.agent.read_session(f), ("claude", "old-claude-id"))
+        task = {"text": "привет"}
+        eng, cmd, extra = self.agent.build_cmd({"engine": "opencode", "opencode": {"bin": "oc"}}, task, f)
+        self.assertEqual(eng, "opencode")
+        self.assertNotIn("--session", cmd)                          # id claude не уходит в opencode
+        f.write_text(json.dumps({"engine": "opencode", "id": "ses_1"}))
+        _, cmd, extra = self.agent.build_cmd({"engine": "opencode", "opencode": {"bin": "oc"}}, task, f)
+        self.assertEqual(cmd[cmd.index("--session") + 1], "ses_1")
+        self.assertIn("OPENCODE_CONFIG_DIR", extra)
+        self.assertIn("--standalone", cmd)                          # без него конфиг-папка игнорируется
+        _, cmd, _ = self.agent.build_cmd({"engine": "claude"}, task, f)
+        self.assertNotIn("--resume", cmd)                           # и наоборот
+
+    def test_opencode_config_from_allowed_tools(self):
+        cfg = {"allowed_tools": ["Bash(tg:*)", "Bash(ls:*)", "Read", "Skill"],
+               "opencode": {"config_dir": str(self.tmp / "oc")}}
+        f = self.agent.opencode_config(cfg)
+        conf = json.loads(f.read_text())
+        p = conf["permission"]
+        self.assertEqual(p["bash"]["*"], "deny")
+        self.assertEqual(p["bash"]["tg *"], "allow")
+        self.assertEqual((p["read"], p["skill"], p["edit"], p["webfetch"]), ("allow", "allow", "deny", "deny"))
+        vals = [v for v in p.values() if isinstance(v, str)] + list(p["bash"].values())
+        self.assertNotIn("ask", vals)                                # в headless «ask» = зависание
+        self.assertTrue(any(x.endswith("/skills") for x in conf["skills"]))
+
+
+class EngineCommand(unittest.TestCase):
+    def test_switch(self):
+        tg, _ = load()
+        api = FakeApi()
+        tg.route(api, msg(42, "/start"))
+        tg.CONF.mkdir(parents=True, exist_ok=True)
+        (tg.CONF / "agent.json").write_text(json.dumps({"engine": "claude", "opencode": {"model": "m"}}))
+        tg.route(api, msg(42, "/engine opencode"))
+        self.assertEqual(json.loads((tg.CONF / "agent.json").read_text())["engine"], "opencode")
+        tg.route(api, msg(42, "/engine whatever"))                   # неизвестное — не меняет
+        self.assertEqual(json.loads((tg.CONF / "agent.json").read_text())["engine"], "opencode")
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,8 +11,15 @@
     "env_file": "/home/u/.config/job-apply/worker.env",   # прокси и пр. (у демона под systemd их нет)
     "runs_dir": "/home/u/.local/share/job-apply/runs",    # регистрация прогона для лока браузера (job-apply lock.mjs)
     "permission_mode": "acceptEdits",
-    "general": "single"                                  # "single" (по умолчанию): общий чат = одна сессия, без
-  }                                                      #   новых вкладок; "tabs": каждая задача общего чата — вкладка
+    "general": "single",                                 # "single" (по умолчанию): общий чат = одна сессия, без
+                                                         #   новых вкладок; "tabs": каждая задача общего чата — вкладка
+    "engine": "claude",                                  # запасной движок: "opencode" (тот же раннер, тот же статус)
+    "opencode": {"bin": "/home/u/.opencode/bin/opencode", "config_dir": "/home/u/.config/tg-bridge/opencode-agent",
+                 "model": "qwen/qwen3.8-max"}
+  }
+Движок можно менять на лету: раннер живёт только пока есть задачи. Конфиг OpenCode-агента собирается из этого же
+allowed_tools: `agent.py opencode-config [--provider-from <opencode.jsonc>]` (права — legacy-ключ `permission`:
+массив `permissions` в `opencode run` 2.3 не применяется, проверено).
 Очередь: ~/.local/share/tg-bridge/tasks/*.json. Идут сейчас: running/*.json (для /status и /stop).
 Вкладки (Threaded Mode): задача внутри вкладки продолжает её сессию (sessions/<thread>, cwd из threads.json).
 Общий чат: при "general": "single" все его задачи — одна сессия (sessions/general) прямо в общем чате, по очереди;
@@ -116,6 +123,78 @@ def open_tab(task):
     return tid
 
 
+def read_session(f):
+    """sessions/<вкладка>: {"engine": …, "id": …}; старый голый id — сессия claude."""
+    if not f.exists():
+        return None, None
+    raw = f.read_text().strip()
+    try:
+        d = json.loads(raw)
+        return d.get("engine"), d.get("id")
+    except json.JSONDecodeError:
+        return ("claude", raw) if raw else (None, None)
+
+
+def opencode_config(cfg, provider_from=None):
+    """Конфиг OpenCode-агента из allowed_tools (Claude-синтаксис): Bash(x:*) → permission.bash «x *»: allow,
+    Read/Write/Edit/Glob/Grep/Skill/WebFetch/WebSearch → allow; остальное deny. Без «ask»: в headless некому ответить."""
+    oc = cfg.get("opencode", {})
+    out_dir = Path(oc.get("config_dir") or CONF / "opencode-agent").expanduser()
+    tools = cfg.get("allowed_tools", [])
+    bash = {"*": "deny"}
+    for t in tools:
+        m = __import__("re").match(r"Bash\(([^:)]+):\*\)", t)
+        if m:
+            bash[f"{m.group(1)} *"] = "allow"
+            bash[m.group(1)] = "allow"
+    has = lambda n: "allow" if n in tools else "deny"
+    perm = {"bash": bash, "read": has("Read"), "edit": "allow" if {"Write", "Edit"} & set(tools) else "deny",
+            "glob": has("Glob"), "grep": has("Grep"), "list": has("Glob"), "skill": has("Skill"),
+            "webfetch": has("WebFetch"), "websearch": has("WebSearch"), "task": "deny", "todowrite": "allow",
+            "external_directory": "allow"}
+    plugins = HERE.parent.parent                                   # sapar-skills/plugins
+    skills = [str(d) for d in sorted(plugins.glob("*/skills")) if d.is_dir()]
+    skills.append(str(Path.home() / ".claude" / "skills"))
+    conf = {"$schema": "https://opencode.ai/config.json", "snapshot": False,
+            "model": oc.get("model", "opencode/deepseek-v4.1-flash-free"), "skills": skills, "permission": perm}
+    if provider_from:                                              # свой провайдер (ключ — из env, не в файле)
+        import re as _re
+        src = _re.sub(r"^\s*//.*$", "", Path(provider_from).expanduser().read_text(), flags=_re.M)
+        prov = json.loads(src).get("provider")
+        if prov:
+            conf["provider"] = prov
+    out_dir.mkdir(parents=True, exist_ok=True)
+    f = out_dir / "opencode.jsonc"
+    f.write_text(json.dumps(conf, ensure_ascii=False, indent=2))   # собрано из agent.json — правь там и пересобери
+    return f
+
+
+def build_cmd(cfg, task, sess_file):
+    """-> (engine, cmd, env_extra). Сессия продолжается, только если записана тем же движком."""
+    engine = cfg.get("engine", "claude")
+    s_engine, sid = read_session(sess_file)
+    sid = sid if s_engine == engine else None
+    if engine == "opencode":
+        oc = cfg.get("opencode", {})
+        cmd = [oc.get("bin") or shutil.which("opencode") or str(Path.home() / ".opencode/bin/opencode"),
+               "run", "--standalone", "--format", "json"]      # standalone: иначе фоновый сервис со СВОИМ конфигом
+        if oc.get("model"):
+            cmd += ["-m", oc["model"]]
+        if sid:
+            cmd += ["--session", sid]
+        cmd.append(prompt(task["text"]))
+        return engine, cmd, {"OPENCODE_CONFIG_DIR": str(Path(oc.get("config_dir") or CONF / "opencode-agent").expanduser())}
+    cmd = [cfg.get("claude", "claude"), "-p", prompt(task["text"]), "--output-format", "stream-json",
+           "--verbose", "--permission-mode", cfg.get("permission_mode", "acceptEdits")]
+    if cfg.get("allowed_tools"):
+        cmd += ["--allowedTools", *cfg["allowed_tools"]]
+    for dd in cfg.get("add_dirs", []):
+        cmd += ["--add-dir", dd]
+    if sid:
+        cmd += ["--resume", sid]
+    return engine, cmd, {}
+
+
 def run(cfg, task, key):
     tid = open_tab(task)
     in_tab = bool(task.get("thread"))                              # писали во вкладке: статус — ответом на сообщение
@@ -136,15 +215,9 @@ def run(cfg, task, key):
     info.parent.mkdir(parents=True, exist_ok=True)
     try:
         for attempt in (1, 2):
-            sid = sess_file.read_text().strip() if sess_file.exists() else None
-            cmd = [cfg.get("claude", "claude"), "-p", prompt(task["text"]), "--output-format", "stream-json",
-                   "--verbose", "--permission-mode", cfg.get("permission_mode", "acceptEdits")]
-            if cfg.get("allowed_tools"):
-                cmd += ["--allowedTools", *cfg["allowed_tools"]]
-            for dd in cfg.get("add_dirs", []):
-                cmd += ["--add-dir", dd]
-            if sid:
-                cmd += ["--resume", sid]
+            engine, cmd, extra = build_cmd(cfg, task, sess_file)
+            sid = read_session(sess_file)[1] if read_session(sess_file)[0] == engine else None
+            env.update(extra)
             log = DATA / "agent-logs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{tid or 'general'}.jsonl"
             log.parent.mkdir(parents=True, exist_ok=True)
             # через fish: config.fish экспортирует креды (KC_*, MAILRU_*), которых нет в окружении systemd --user
@@ -155,12 +228,13 @@ def run(cfg, task, key):
             info.write_text(json.dumps({"thread": tid, "title": title, "started": time.time(), "pgid": claude.pid},
                                        ensure_ascii=False))
             # без шапки: статус — ответ на сообщение с задачей или первое сообщение вкладки, названной по задаче
-            subprocess.run([*TG, "progress", "--log", str(log), "--freeform",
+            subprocess.run([*TG, "progress", "--log", str(log), "--freeform", "--source", engine,
                             "--session-file", str(sess_file),
                             *(["--reply-to", str(task["message_id"])] if in_tab or not tid else [])],
                            stdin=claude.stdout, capture_output=True, text=True, env=env)
             claude.wait()
-            if sid and attempt == 1 and "No conversation found" in log.read_text(errors="ignore"):
+            dead = "No conversation found" if engine == "claude" else "Session not found"
+            if sid and attempt == 1 and dead.lower() in log.read_text(errors="ignore").lower():
                 sess_file.unlink(missing_ok=True)                  # сессию не нашли — один раз заново
                 continue
             return
@@ -176,12 +250,23 @@ def run(cfg, task, key):
 
 
 def stop_all():
-    """claude у каждой задачи в своей группе процессов — гасим их явно, иначе переживут раннер."""
+    """claude/opencode у каждой задачи в своей группе процессов — гасим их явно, иначе переживут раннер:
+    SIGTERM, и через 5 с SIGKILL тем, кто ещё жив (OpenCode со своим сервером выходит не сразу)."""
+    groups = []
     for f in (DATA / "running").glob("*.json"):
         try:
-            os.killpg(json.loads(f.read_text())["pgid"], signal.SIGTERM)
+            pg = json.loads(f.read_text())["pgid"]
+            os.killpg(pg, signal.SIGTERM)
+            groups.append(pg)
         except (OSError, ValueError, KeyError):
             pass
+    if groups:
+        time.sleep(5)
+        for pg in groups:
+            try:
+                os.killpg(pg, signal.SIGKILL)
+            except OSError:
+                pass
 
 
 def main():
@@ -215,4 +300,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["opencode-config"]:
+        c = json.loads((CONF / "agent.json").read_text())
+        pf = sys.argv[sys.argv.index("--provider-from") + 1] if "--provider-from" in sys.argv else None
+        print(opencode_config(c, pf))
+    else:
+        main()

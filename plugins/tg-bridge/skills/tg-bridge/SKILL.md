@@ -65,9 +65,19 @@ The bot has Threaded Mode on, and **one tab (topic) is one task with its own ses
 - `TG_THREAD` in the environment routes `send`/`ask`/`edit`/`progress` into the tab, and makes `inbox` return that tab's items only
   (`--all` returns every tab). A deleted tab falls back to the general chat.
 
-Up to `parallel` tasks (default 3) run at once, one per tab, and a tab's tasks keep their order. The browser is the only
-shared resource. The first `browser.mjs`/`hh.mjs`/`relay.mjs` call of a run takes it (`JOB_APPLY_RUN` + job-apply
-`scripts/lock.mjs`), others wait up to 30 min, and it is released when the run ends. Tasks without the browser never wait.
+Up to `parallel` tasks (default 3) run at once, one per tab, and a tab's tasks keep their order. The browser is shared,
+but each run (`JOB_APPLY_RUN`) works in its own tab of it (job-apply `browser.mjs`), so runs don't wait for each other.
+
+**Engines.** Tasks run on `claude -p` by default. `"engine": "opencode"` in agent.json (or `/engine opencode` in the
+bot) switches them to OpenCode — the spare engine for when Claude is at its limit. Same runner, same live status
+(`tg progress --source opencode`), same tabs; sessions are per engine (`sessions/<tab>` = `{"engine", "id"}`).
+- Config: `python3 scripts/agent.py opencode-config [--provider-from <opencode.jsonc>]` builds
+  `~/.config/tg-bridge/opencode-agent/opencode.jsonc` from agent.json `allowed_tools` (Bash(x:*) → `permission.bash`
+  «x *»: allow, everything else denied; no «ask» — headless can't answer). Model: agent.json `opencode.model`.
+- Must-knows (OpenCode 2.3, checked): `run --standalone` is required — without it the run goes to the background
+  service with the global config and ignores `OPENCODE_CONFIG_DIR`; the new `permissions` rule array is not enforced
+  by `opencode run`, the legacy `permission` object is; skills must be listed in `skills` (the global ones are cut off).
+- `/stop` sends SIGTERM to the task's process group and SIGKILL 5 s later (OpenCode's own server exits slowly).
 `/stop` inside a tab stops that tab's task, and in the general chat it stops all of them. `/status` shows who holds the browser. Commands: `/help`, `/new`, `/reset`, `/status`, `/stop`, `/inbox`, plus any
 registered action as `/<name>` (with `{arg}` it takes the text after the command). An action started by a command or a
 button gets `TG_THREAD` of that chat or tab, so its own `tg send` replies in the same place. Rules for a run: [references/remote.md](references/remote.md). The runner is a child of
