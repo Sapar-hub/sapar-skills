@@ -46,8 +46,9 @@ def hh_date(s, today):
 
 def negotiations():
     env = dict(os.environ)
-    # браузер job-apply мог быть не запущен (таймер): поднимаем; уже запущенный не трогается
-    subprocess.run(["node", str(HERE / "browser.mjs"), "start", "--headless"], cwd=HERE, env=env,
+    # браузер job-apply мог быть не запущен (таймер): поднимаем окном на невидимом Xvfb, не headless —
+    # иначе воркер потом подцепится к headless-браузеру, а job.psbank.ru его режет; уже запущенный не трогается
+    subprocess.run(["node", str(HERE / "browser.mjs"), "start", "--offscreen"], cwd=HERE, env=env,
                    capture_output=True, timeout=120)
     r = subprocess.run(["node", str(HERE / "hh.mjs"), "negotiations", "--json"], capture_output=True,
                        text=True, cwd=HERE, env=env, timeout=600)

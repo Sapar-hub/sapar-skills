@@ -246,7 +246,12 @@ const cmds = {
     try { await (await chromium.connectOverCDP(CDP)).close(); return console.log('OK: уже запущен'); } catch {}
     const flags = [`--remote-debugging-port=${PORT}`, '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${join(HOME, 'profile')}`, '--no-first-run', '--no-default-browser-check', '--lang=ru-RU', '--window-size=1400,1000'];
-    if (args.includes('--headless')) flags.push('--headless=new');
+    // --offscreen: настоящее окно (WAF вроде job.psbank.ru режут headless), но на невидимом Xvfb (JOB_APPLY_XVFB, :99),
+    // чтобы таймеры не открывали окно на экране. Нет Xvfb — headless как запасной вариант.
+    const xvfb = process.env.JOB_APPLY_XVFB || ':99';
+    const offscreen = args.includes('--offscreen') && existsSync(`/tmp/.X11-unix/X${xvfb.replace(/^:/, '')}`);
+    if (args.includes('--headless') || (args.includes('--offscreen') && !offscreen)) flags.push('--headless=new');
+    if (offscreen) flags.push('--ozone-platform=x11');
     // Российские сайты, которые режут зарубежный выход («VPN detected» на hh), — мимо прокси, напрямую.
     // Список: JOB_APPLY_DIRECT_HOSTS (через ;), по умолчанию hh и ПСБ (job.psbank.ru ещё и режет headless — только окно). Chromium сам читает *_PROXY только без --proxy-server,
     // поэтому прокси из окружения передаём флагом, а исключения — --proxy-bypass-list.
@@ -258,7 +263,8 @@ const cmds = {
     // Свои корневые сертификаты (напр. SberCA для входа через Сбер ID) — только для этого браузера: Chromium на Linux
     // берёт хранилище из $HOME/.pki/nssdb, поэтому при наличии HOME/chrome-home/.pki/nssdb запускаем с этим HOME.
     const certHome = join(HOME, 'chrome-home');
-    const env = existsSync(join(certHome, '.pki', 'nssdb')) ? { ...process.env, HOME: certHome } : process.env;
+    const env = existsSync(join(certHome, '.pki', 'nssdb')) ? { ...process.env, HOME: certHome } : { ...process.env };
+    if (offscreen) { env.DISPLAY = xvfb; delete env.WAYLAND_DISPLAY; }
     spawn(chromium.executablePath(), [...flags, 'about:blank'], { detached: true, stdio: ['ignore', log, log], env }).unref();
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 250));

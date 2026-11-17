@@ -13,6 +13,7 @@ and a half-filled form survive between calls. Run `npm i` in `scripts/` once.
 ```bash
 B="node scripts/browser.mjs"
 $B start                 # headed window; the user can watch, log in and solve captchas
+$B start --offscreen     # real window on the invisible Xvfb (:99, JOB_APPLY_XVFB) — timers; WAF-safe, unlike --headless
 $B goto <url>
 $B text 4000             # read the vacancy and the form labels
 $B snap                  # interactive elements: e12 textbox "Телефон" value="…" *   (* = required)
