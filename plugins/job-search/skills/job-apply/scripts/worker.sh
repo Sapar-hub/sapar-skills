@@ -92,21 +92,22 @@ print(next((k for k,v in t.items() if v.get("kind")=="apply:"+sys.argv[1]), ""))
   $Q set "$key" "$status" --note "${line#STATUS: $status}" >/dev/null
   echo "$key $status"
   # вкладка прогона: paused — оставить (форма заполнена, продолжишь), иначе закрыть
-  [ "$status" = paused ] || (cd "$SCRIPTS" && node browser.mjs droptab >/dev/null 2>&1)
-  [ "$status" != paused ]                         # paused: дальше не идём, вкладку не трогаем
+  [ "$status" = paused ] || (cd "$SCRIPTS" && node browser.mjs droptab >/dev/null 2>&1) || true
+  return 0                                        # paused не держит очередь: у отклика своя вкладка, форма в ней ждёт
 }
 
 if [ $# -gt 0 ]; then
   run_one "$1"
   exit 0
 fi
-slot() {                                          # слот: берёт элементы, пока есть; paused/лимит — слот встаёт
+slot() {                                          # слот: берёт элементы, пока есть; лимит API — слот встаёт
   while key=$($Q claim) && [ -n "$key" ]; do
-    run_one "$key" || break
+    run_one "$key" || { echo "слот $1: стоп после $key (лимит)"; return; }
   done
+  echo "слот $1: очередь пуста"
 }
-for _ in $(seq "$SLOTS"); do
-  slot &
+for n in $(seq "$SLOTS"); do
+  slot "$n" &
   sleep 20                                         # разнести старты: браузер/исполнитель не дёргать одновременно
 done
 wait
