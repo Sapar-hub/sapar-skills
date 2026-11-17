@@ -11,7 +11,7 @@
 Конфиг: ~/.config/job-apply/sheet.env — TRACKER_URL, TRACKER_SECRET (см. apps-script/tracker.gs).
 Код выхода 3 = не настроено (используй tracker.py add — outbox).
 """
-import argparse, json, os, sys, urllib.request
+import argparse, http.client, json, os, sys, time, urllib.request
 from pathlib import Path
 
 ENV = Path(os.environ.get("JOB_APPLY_CONFIG", "~/.config/job-apply")).expanduser() / "sheet.env"
@@ -35,9 +35,17 @@ def call(op, **kw):
         sys.exit(3)
     body = json.dumps({"secret": c["TRACKER_SECRET"], "op": op, **kw}, ensure_ascii=False).encode()
     req = urllib.request.Request(c["TRACKER_URL"], data=body, headers={"Content-Type": "application/json"})
-    # Apps Script отвечает 302 на googleusercontent; urllib идёт туда GET'ом — там и лежит ответ
-    with urllib.request.urlopen(req, timeout=60) as r:
-        res = json.loads(r.read())
+    # Apps Script отвечает 302 на googleusercontent; urllib идёт туда GET'ом — там и лежит ответ.
+    # Чтение повторяем при обрыве (прокси рвёт соединения); запись — нет: update --add мог уже пройти.
+    for attempt in range(3 if op in ("find", "ping") else 1):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.loads(r.read())
+            break
+        except (OSError, http.client.HTTPException):
+            if attempt == (2 if op in ("find", "ping") else 0):
+                raise
+            time.sleep(3 * (attempt + 1))
     if not res.get("ok"):
         sys.exit(f"ERR: {res.get('error')}")
     return res

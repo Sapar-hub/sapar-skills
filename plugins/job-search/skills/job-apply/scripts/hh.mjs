@@ -7,6 +7,8 @@
 //   hh.mjs sync <track> <tailored.yaml> [--dry] переписать резюме трека: «Обо мне», ключевые навыки, ЗП пустая
 //   hh.mjs find --title T --company C          та же вакансия на hh: строки FOUND|APPLIED <url> <должность> <работодатель>
 //                                                <оценка> (до 3, лучшая первой) или NONE
+//   hh.mjs negotiations [--json]               мои отклики на hh со статусом: TSV <статус> <дата> <url> <должность>
+//                                                <работодатель>; статус = invitation|rejection|viewed|not-viewed|<тег hh>
 //
 // Что синхронизируется: per-resume поля hh — «Обо мне» (about + проекты + публикации), ключевые навыки,
 // уровень дохода (всегда пусто). Название/профессия, опыт, образование, контакты — общие в профиле hh,
@@ -223,6 +225,41 @@ async function find(title, company) {
   } finally { await page.close(); await browser.close(); }
 }
 
+// --- мои отклики (applicant/negotiations): статус работодателя по каждому ---
+async function negotiations(asJson) {
+  const { browser, page } = await connect();
+  const out = [];
+  try {
+    for (let n = 0; n < 20; n++) {
+      await open(page, `https://hh.ru/applicant/negotiations?filter=all&page=${n}`);
+      const items = await page.evaluate(() => [...document.querySelectorAll('[data-qa="negotiations-item"]')].map((it) => {
+        const a = it.querySelector('[data-qa="negotiations-item-vacancy"] a[href*="/vacancy/"], a[href*="/vacancy/"]');
+        const tag = it.querySelector('[data-qa^="negotiations-tag"]');
+        const qa = (tag?.getAttribute('data-qa') || '').match(/negotiations-item-([\w-]+)/);
+        const t = (sel) => (it.querySelector(sel)?.textContent || '').trim();
+        return {
+          id: (a?.href.match(/\/vacancy\/(\d+)/) || [])[1] || '',
+          title: (a?.textContent || t('[data-qa="negotiations-item-vacancy"]')).trim(),
+          company: t('[data-qa="negotiations-item-company"]'), date: t('[data-qa="negotiations-item-date"]'),
+          tag: qa ? qa[1] : '', tagText: (tag?.textContent || '').trim(),
+        };
+      }));
+      if (!items.length) break;
+      out.push(...items);
+      const more = await page.locator('[data-qa="pager-next"]').count();
+      if (!more) break;
+    }
+  } finally { await page.close(); await browser.close(); }
+  // «discard» = отказ; приглашение/собеседование/выход — всё, что зовёт дальше
+  const status = (x) => x.tag === 'discard' ? 'rejection'
+    : /invit|interview|hired|offer|phone/.test(x.tag) || /Приглаш|Invitation|Interview|Собесед|Выход|Work start/i.test(x.tagText) ? 'invitation'
+    : x.tag || (/Отказ|Rejection/i.test(x.tagText) ? 'rejection' : 'unknown');
+  const rows = out.map((x) => ({ status: status(x), date: x.date, url: x.id ? `https://hh.ru/vacancy/${x.id}` : '',
+    title: x.title, company: x.company, tag: x.tagText }));
+  if (asJson) say(JSON.stringify(rows, null, 1));
+  else for (const r of rows) say([r.status, r.date, r.url, r.title, r.company].map((v) => clean(v).replace(/\t/g, ' ')).join('\t'));
+}
+
 const [cmd, ...args] = process.argv.slice(2);
 if (cmd === 'resumes') {
   await listResumes();
@@ -263,6 +300,8 @@ if (cmd === 'resumes') {
   const opt = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : ''; };
   if (!opt('--title') || !opt('--company')) die('hh.mjs find --title <должность> --company <компания>');
   await find(opt('--title'), opt('--company'));
+} else if (cmd === 'negotiations') {
+  await negotiations(args.includes('--json'));
 } else {
-  die('команды: resumes | map | sync <track> <tailored.yaml> [--dry] | find --title T --company C');
+  die('команды: resumes | map | sync <track> <tailored.yaml> [--dry] | find --title T --company C | negotiations [--json]');
 }

@@ -9,10 +9,12 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 UNIT_DIR=$HOME/.config/systemd/user
 ONCALENDAR=${ONCALENDAR:-'*-*-* 10:30'}
 TOPICS_ONCALENDAR=${TOPICS_ONCALENDAR:-'*-*-* 21:47'}
+# статусы откликов hh → трекер, сводка в Telegram (job-apply-hhstatus), команда бота /hh
+HH_ONCALENDAR=${HH_ONCALENDAR:-'*-*-* 10,15,20:43:00'}
 
 if [ "${1:-}" = uninstall ]; then
-  systemctl --user disable --now job-apply-worker.timer job-apply-topics.timer 2>/dev/null || true
-  rm -f "$UNIT_DIR"/job-apply-worker.{service,timer} "$UNIT_DIR"/job-apply-topics.{service,timer}
+  systemctl --user disable --now job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer 2>/dev/null || true
+  rm -f "$UNIT_DIR"/job-apply-worker.{service,timer} "$UNIT_DIR"/job-apply-topics.{service,timer} "$UNIT_DIR"/job-apply-hhstatus.{service,timer}
   systemctl --user daemon-reload
   echo "OK: удалено"; exit 0
 fi
@@ -72,6 +74,29 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+# статусы откликов на hh → трекер (hhstatus.py сам поднимает браузер; hh ходит мимо прокси — browser.mjs)
+cat > "$UNIT_DIR/job-apply-hhstatus.service" <<EOF
+[Unit]
+Description=job-apply: hh.ru application statuses -> job_tracker
+
+[Service]
+Type=oneshot
+EnvironmentFile=-$ENVF
+Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=/usr/bin/env python3 -I $HERE/hhstatus.py --apply --tg
+TimeoutStartSec=20min
+EOF
+cat > "$UNIT_DIR/job-apply-hhstatus.timer" <<EOF
+[Unit]
+Description=job-apply: hh statuses 3x a day
+
+[Timer]
+OnCalendar=$HH_ONCALENDAR
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
 TG=$(command -v tg || { [ -x "$HOME/.local/bin/tg" ] && echo "$HOME/.local/bin/tg"; } || true)
 if [ -n "$TG" ]; then
   PY=$(command -v python3)
@@ -80,8 +105,9 @@ if [ -n "$TG" ]; then
   "$TG" action add contacts --desc "контакты рекрутеров: кому писал, кто ответил" -- "$PY" -I "$HERE/board.py" contacts --tg >/dev/null
   "$TG" action add cleanup --desc "удалить все вкладки, кроме открытых в трекере (сначала покажет список)" -- "$PY" -I "$HERE/topics.py" cleanup >/dev/null
   "$TG" action add topics-clean -- "$PY" -I "$HERE/topics.py" clean-go {arg} >/dev/null
+  "$TG" action add hh --desc "статусы откликов на hh → трекер (отказы закрывает, приглашения поднимает)" -- "$PY" -I "$HERE/hhstatus.py" --apply >/dev/null
   "$TG" action add cv -- "$PY" -I "$HERE/board.py" cv {arg} >/dev/null          # deep link «резюме» в /tracker
 fi
 systemctl --user daemon-reload
-systemctl --user enable --now job-apply-worker.timer job-apply-topics.timer >/dev/null
-echo "OK: job-apply-worker.service + timer ($ONCALENDAR), job-apply-topics.timer ($TOPICS_ONCALENDAR)${TG:+, команды /queue /tracker /contacts /cleanup}"
+systemctl --user enable --now job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer >/dev/null
+echo "OK: job-apply-worker.service + timer ($ONCALENDAR), job-apply-topics.timer ($TOPICS_ONCALENDAR), job-apply-hhstatus.timer ($HH_ONCALENDAR)${TG:+, команды /queue /tracker /contacts /cleanup /hh}"
