@@ -74,8 +74,8 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
   - Statuses: `python3 -I scripts/hhstatus.py [--apply] [--tg]` reads hh «Отклики» (`hh.mjs negotiations`)
     and updates tracker rows linked by the hh vacancy id in I or N: a rejection closes an open row, an
     invitation sets «В процессе» + «⚠ ДЕЙСТВИЕ НУЖНО» in F, a view adds a line to N. The
-    `job-apply-hhstatus` timer (install-worker.sh, 10:43/15:43/20:43) runs it with `--apply --tg`; the
-    bot command is /hh. So always put the hh link in I or N when applying on hh.
+    `job-apply-hhstatus` timer (install-worker.sh, 10:43/15:43/20:43) runs it with `--apply --tg`. So
+    always put the hh link in I or N when applying on hh.
   - hh answers a foreign exit with «VPN detected», so `browser.mjs start` sends hh.ru/hhcdn.ru past the
     proxy (`JOB_APPLY_DIRECT_HOSTS`, `;`-separated; the default is hh). Never click «I'm not using a VPN».
 - **Preflight, before writing a resume.** Two checks, both advisory; show the result to the user in a line or two:

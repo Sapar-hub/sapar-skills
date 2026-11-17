@@ -9,7 +9,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 UNIT_DIR=$HOME/.config/systemd/user
 ONCALENDAR=${ONCALENDAR:-'*-*-* 10:30'}
 TOPICS_ONCALENDAR=${TOPICS_ONCALENDAR:-'*-*-* 21:47'}
-# статусы откликов hh → трекер, сводка в Telegram (job-apply-hhstatus), команда бота /hh
+# статусы откликов hh → трекер, сводка в Telegram (job-apply-hhstatus)
 HH_ONCALENDAR=${HH_ONCALENDAR:-'*-*-* 10,15,20:43:00'}
 
 if [ "${1:-}" = uninstall ]; then
@@ -105,9 +105,8 @@ if [ -n "$TG" ]; then
   "$TG" action add contacts --desc "контакты рекрутеров: кому писал, кто ответил" -- "$PY" -I "$HERE/board.py" contacts --tg >/dev/null
   "$TG" action add cleanup --desc "удалить все вкладки, кроме открытых в трекере (сначала покажет список)" -- "$PY" -I "$HERE/topics.py" cleanup >/dev/null
   "$TG" action add topics-clean -- "$PY" -I "$HERE/topics.py" clean-go {arg} >/dev/null
-  "$TG" action add hh --desc "статусы откликов на hh → трекер (отказы закрывает, приглашения поднимает)" -- "$PY" -I "$HERE/hhstatus.py" --apply >/dev/null
   "$TG" action add cv -- "$PY" -I "$HERE/board.py" cv {arg} >/dev/null          # deep link «резюме» в /tracker
 fi
 systemctl --user daemon-reload
 systemctl --user enable --now job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer >/dev/null
-echo "OK: job-apply-worker.service + timer ($ONCALENDAR), job-apply-topics.timer ($TOPICS_ONCALENDAR), job-apply-hhstatus.timer ($HH_ONCALENDAR)${TG:+, команды /queue /tracker /contacts /cleanup /hh}"
+echo "OK: job-apply-worker.service + timer ($ONCALENDAR), job-apply-topics.timer ($TOPICS_ONCALENDAR), job-apply-hhstatus.timer ($HH_ONCALENDAR)${TG:+, команды /queue /tracker /contacts /cleanup}"
