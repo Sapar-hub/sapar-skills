@@ -304,5 +304,23 @@ class Rich(unittest.TestCase):
         self.assertEqual((kw["chat_id"], kw["message_thread_id"]), (42, 500))
         self.assertEqual(kw["rich_message"], {"markdown": "<details><summary>a</summary>b</details>"})
 
+
+class DeepLink(unittest.TestCase):
+    def test_start_payload_runs_action(self):
+        tg, _ = load()
+        api = FakeApi()
+        tg.route(api, msg(42, "/start"))
+        tg.CONF.mkdir(parents=True, exist_ok=True)
+        (tg.CONF / "actions.json").write_text(json.dumps({"cv": ["echo", "cv={arg}"]}))
+        self.assertEqual(tg.route(api, msg(42, "/start cv__70")), "cmd:start>cv")
+        sent = [kw["text"] for m, kw in api.calls if m == "sendMessage"]
+        self.assertIn("cv=70", sent[-1])
+
+    def test_start_unknown_action(self):
+        tg, _ = load()
+        api = FakeApi()
+        tg.route(api, msg(42, "/start"))
+        self.assertEqual(tg.route(api, msg(42, "/start nope__1")), "cmd:start?nope")
+
 if __name__ == "__main__":
     unittest.main()

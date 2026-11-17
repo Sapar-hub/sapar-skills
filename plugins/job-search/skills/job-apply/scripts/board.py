@@ -4,6 +4,7 @@
   board.py queue [--tg]      /queue    — очередь автооткликов по статусам: что ждёт и почему
   board.py tracker [--tg]    /tracker  — открытые строки job_tracker карточками (подробности свёрнуты)
   board.py contacts [--tg]   /contacts — контакты рекрутеров: кто, где, писал ли
+  board.py cv <строка>       deep link «резюме» в карточке трекера: прислать PDF, с которым подавались
 
 --tg: одним rich-сообщением в Telegram (`tg send --rich`): Markdown, каждая запись — сворачиваемый
 <details>-блок (заголовок виден, подробности по нажатию), до 32768 символов.
@@ -125,9 +126,58 @@ def card(r):
     if notes:
         body.append(md(notes))
     link = next((u for u in re.split(r"\s*;\s*|\s+", url) if u.startswith("http")), "")
-    if link:
-        body.append(f"[вакансия]({link})")
+    links = [f"[вакансия]({link})"] if link else []
+    if resume_path(v[9]) and bot_name():                       # deep link: бот пришлёт PDF, с которым подавались
+        links.append(f"[резюме](https://t.me/{bot_name()}?start=cv__{r['row']})")
+    if links:
+        body.append(" · ".join(links))
     return f"<details><summary>{head}</summary>\n\n" + "\n\n".join(body) + "\n</details>\n"
+
+
+_BOT = None
+
+
+def bot_name():
+    """@username бота для deep link (кэш в $JOB_APPLY_HOME/bot-username)."""
+    global _BOT
+    if _BOT is None:
+        f = S.HOME / "bot-username"
+        if f.exists():
+            _BOT = f.read_text().strip()
+        else:
+            r = subprocess.run(["tg", "whoami"], capture_output=True, text=True)
+            m = re.match(r"@(\w+)", r.stdout.strip())
+            _BOT = m.group(1) if m else ""
+            if _BOT:
+                f.write_text(_BOT)
+    return _BOT
+
+
+def resume_path(cell):
+    """Столбец J трекера («applications/q…/X.pdf», «q…/X.pdf» или абсолютный путь) -> существующий PDF или None."""
+    for part in re.split(r"\s*;\s*", cell or ""):
+        part = part.strip()
+        if not part.lower().endswith(".pdf"):
+            continue
+        for cand in (Path(part), S.HOME / part, S.HOME / "applications" / part):
+            if cand.is_absolute() and cand.exists():
+                return cand
+    return None
+
+
+def cmd_cv(a):
+    """/start cv__<строка>: прислать PDF резюме, с которым подавались на вакансию из строки трекера."""
+    data, _ = sheet()
+    r = next((r for r in data if str(r["row"]) == str(a.row)), None)
+    if not r:
+        print(f"Строки {a.row} в трекере нет."); return
+    v = r["values"] + [""] * 14
+    pdf = resume_path(v[9])
+    if not pdf:
+        print(f"Для «{v[0]} — {v[1]}» PDF резюме не нашёл (столбец J: {v[9] or 'пусто'})."); return
+    p = subprocess.run(["tg", "send", f"Резюме: {v[0]} — {v[1]}", "--doc", str(pdf)], capture_output=True, text=True)
+    if p.returncode:
+        print(f"ERR tg send: {p.stderr.strip()[:300]}")
 
 
 def cmd_tracker(a):
@@ -182,6 +232,7 @@ def main():
         p = sp.add_parser(name)
         p.add_argument("--tg", action="store_true", help="HTML прямо в Telegram")
         p.set_defaults(f=f)
+    c = sp.add_parser("cv"); c.add_argument("row"); c.set_defaults(f=cmd_cv)
     a = ap.parse_args()
     a.f(a)
 

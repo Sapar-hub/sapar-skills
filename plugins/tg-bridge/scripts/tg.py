@@ -639,6 +639,18 @@ def command_in(api, me, msg, text):
     name = text[1:].split()[0].split("@")[0]
     say = lambda t: api.call("sendMessage", chat_id=me, text=t, message_thread_id=msg_thread(msg),
                              link_preview_options={"is_disabled": True})
+    payload = text.split(None, 1)[1].strip() if name == "start" and len(text.split(None, 1)) > 1 else ""
+    if payload and "__" in payload:
+        # deep link t.me/<бот>?start=<action>__<arg>: ссылка в сообщении бота запускает action (как кнопка)
+        act, _, arg = payload.partition("__")
+        act = act.replace("_", "-") if act.replace("_", "-") in load_actions() else act
+        if act not in load_actions():
+            say(f"Ссылка устарела: нет действия «{act}».")
+            return f"cmd:start?{act}"
+        code, out = run_action(act, arg, thread=msg_thread(msg))
+        if code or (out or "").strip():
+            say(out[-3500:] if code == 0 else f"{act}: ошибка, код {code}\n{out[-800:]}")
+        return f"cmd:start>{act}"
     if name in ("start", "help"):
         head = HELP if load_agent() else "Пересылай сообщения и файлы — уйдут в inbox. /inbox — что там."
         meta, acts = load_command_meta(), load_actions()

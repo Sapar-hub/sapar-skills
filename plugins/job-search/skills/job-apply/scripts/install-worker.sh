@@ -80,6 +80,7 @@ if [ -n "$TG" ]; then
   "$TG" action add contacts --desc "контакты рекрутеров: кому писал, кто ответил" -- "$PY" -I "$HERE/board.py" contacts --tg >/dev/null
   "$TG" action add cleanup --desc "удалить все вкладки, кроме открытых в трекере (сначала покажет список)" -- "$PY" -I "$HERE/topics.py" cleanup >/dev/null
   "$TG" action add topics-clean -- "$PY" -I "$HERE/topics.py" clean-go {arg} >/dev/null
+  "$TG" action add cv -- "$PY" -I "$HERE/board.py" cv {arg} >/dev/null          # deep link «резюме» в /tracker
 fi
 systemctl --user daemon-reload
 systemctl --user enable --now job-apply-worker.timer job-apply-topics.timer >/dev/null
