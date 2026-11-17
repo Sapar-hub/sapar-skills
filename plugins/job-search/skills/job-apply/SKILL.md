@@ -77,7 +77,7 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
     `job-apply-hhstatus` timer (install-worker.sh, 10:43/15:43/20:43) runs it with `--apply --tg`. So
     always put the hh link in I or N when applying on hh.
   - hh answers a foreign exit with «VPN detected», so `browser.mjs start` sends hh.ru/hhcdn.ru past the
-    proxy (`JOB_APPLY_DIRECT_HOSTS`, `;`-separated; the default is hh). Never click «I'm not using a VPN».
+    proxy (`JOB_APPLY_DIRECT_HOSTS`, `;`-separated; the default is hh and psbank.ru — job.psbank.ru also rejects headless, apply there from a headed window). Never click «I'm not using a VPN».
 - **Preflight, before writing a resume.** Two checks, both advisory; show the result to the user in a line or two:
   ```bash
   $B live <vacancy-url>       # LIVE | CLOSED | UNSURE + evidence (HTTP, «вакансия закрыта», redirect, apply button)

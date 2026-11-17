@@ -248,10 +248,10 @@ const cmds = {
       `--user-data-dir=${join(HOME, 'profile')}`, '--no-first-run', '--no-default-browser-check', '--lang=ru-RU', '--window-size=1400,1000'];
     if (args.includes('--headless')) flags.push('--headless=new');
     // Российские сайты, которые режут зарубежный выход («VPN detected» на hh), — мимо прокси, напрямую.
-    // Список: JOB_APPLY_DIRECT_HOSTS (через ;), по умолчанию hh. Chromium сам читает *_PROXY только без --proxy-server,
+    // Список: JOB_APPLY_DIRECT_HOSTS (через ;), по умолчанию hh и ПСБ (job.psbank.ru ещё и режет headless — только окно). Chromium сам читает *_PROXY только без --proxy-server,
     // поэтому прокси из окружения передаём флагом, а исключения — --proxy-bypass-list.
     const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.ALL_PROXY || process.env.all_proxy;
-    const direct = process.env.JOB_APPLY_DIRECT_HOSTS ?? 'hh.ru;*.hh.ru;hhcdn.ru;*.hhcdn.ru';
+    const direct = process.env.JOB_APPLY_DIRECT_HOSTS ?? 'hh.ru;*.hh.ru;hhcdn.ru;*.hhcdn.ru;psbank.ru;*.psbank.ru';
     if (args.includes('--direct')) flags.push('--no-proxy-server');
     else if (envProxy) flags.push(`--proxy-server=${envProxy}`, `--proxy-bypass-list=${direct}`);
     const log = openSync(join(HOME, 'chrome.log'), 'a');
