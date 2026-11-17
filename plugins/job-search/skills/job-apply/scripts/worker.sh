@@ -26,7 +26,7 @@ flock -n 9 || { echo "worker уже работает"; exit 0; }
 
 # браузер с логинами пользователя: без него отклика нет
 if ! curl -s -m 3 http://127.0.0.1:9333/json/version >/dev/null; then
-  (cd "$SCRIPTS" && node browser.mjs start) >/dev/null 2>&1 &
+  (cd "$SCRIPTS" && node browser.mjs start --offscreen) >/dev/null 2>&1 &   # окно на невидимом Xvfb: WAF пропускает, экран не занят
   sleep 8
   curl -s -m 3 http://127.0.0.1:9333/json/version >/dev/null || {
     "$TG" send "job-apply worker: браузер не стартовал (CDP 9333). Очередь ждёт: queue.py list"; exit 1; }

@@ -81,9 +81,14 @@ cat > "$UNIT_DIR/job-digest.service" <<EOF
 Description=Job digest: RSS -> Mail.ru
 Wants=network-online.target
 After=network-online.target
+# все ленты недоступны (RSSHub/прокси до t.me) → digest.py выходит с 75: повтор через 40 мин, до 3 раз
+StartLimitIntervalSec=4h
+StartLimitBurst=4
 
 [Service]
 Type=oneshot
+Restart=on-failure
+RestartSec=40min
 EnvironmentFile=-$CONF/env
 ExecStart=$EXEC
 ExecStartPost=$EXEC_SORT

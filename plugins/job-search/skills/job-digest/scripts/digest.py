@@ -254,11 +254,13 @@ def cmd_run(a):
     patterns = load_patterns()
     c, now, new = db(), dt.datetime.now().isoformat(timespec="seconds"), 0
     cutoff = (dt.date.today() - dt.timedelta(days=MAX_AGE_DAYS)).isoformat()
-    for url, strict in read_feeds():
+    feeds, failed = read_feeds(), []
+    for url, strict in feeds:
         try:
             name, items = parse_feed(fetch(url))
         except Exception as e:                                   # одна сломанная лента не валит остальные
             print(f"WARN: {url}: {e}", file=sys.stderr)
+            failed.append(url)
             continue
         for it in items:
             if strict:                                           # matched=2; мимо фильтра — не в «Прочее», сразу в архив
@@ -273,6 +275,8 @@ def cmd_run(a):
                              now if skip else None))
             new += cur.rowcount
     c.commit()
+    if feeds and len(failed) == len(feeds):
+        all_feeds_down(len(feeds), a)                            # выходит с 75 → systemd повторит
 
     rows = [dict(zip(COLS, r)) for r in c.execute(
         f"select {', '.join(COLS)} from items where sent_at is null order by pub")]
@@ -293,6 +297,23 @@ def cmd_run(a):
     print(f"OK: «{msg['Subject']}» -> папка {FOLDER}")
     if a.tg:
         push_tg(found_posts(rows, patterns))
+
+
+def all_feeds_down(n, a):
+    """Ни одна лента не ответила (раньше было молчаливое «новых: 0» на дни). Раз в день — в Telegram, код 75."""
+    msg = (f"Дайджест вакансий: ни одна из {n} лент не ответила (RSSHub {RSSHUB_HINT} или прокси до t.me). "
+           "Повторю через 40 минут, до 3 раз; посты не потеряются — заберу при следующем успешном прогоне.")
+    print(f"ERR: все {n} лент недоступны", file=sys.stderr)
+    mark = STATE / "feeds-down.date"
+    if a.tg and not a.dry_run and (not mark.exists() or mark.read_text().strip() != dt.date.today().isoformat()):
+        tg = tg_bin()
+        if tg:
+            subprocess.run([tg, "send", msg], check=False, timeout=60)
+        mark.write_text(dt.date.today().isoformat())
+    sys.exit(75)
+
+
+RSSHUB_HINT = "127.0.0.1:1200"
 
 
 # --- Telegram (tg-bridge) ---
