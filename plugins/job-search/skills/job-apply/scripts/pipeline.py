@@ -37,7 +37,7 @@ EXEC_CONF = CONF / "opencode-executor"
 OPENCODE = shutil.which("opencode") or str(Path.home() / ".opencode/bin/opencode")
 CLAUDE = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
 B = f"node {HERE}/browser.mjs"
-SUCCESS = re.compile(r"спасибо|отклик (отправлен|принят|получен)|мы получили|успешно|заявк[аи] (отправлен|принят)|"
+SUCCESS = re.compile(r"спасибо|отклик (отправлен|принят|получен)|мы получили|успешно (отправ|принят|подан|зарегистр)|заявк[аи] (отправлен|принят|подан)|"
                      r"резюме доставлено|вы откликнулись|you applied|"
                      r"thank you|application (sent|received|submitted)", re.I)
 
@@ -437,14 +437,23 @@ def run(key):
            if re.search(r"откликн|отправ|подать|submit|apply|send", m.group(2), re.I)]
     if not btn:
         return "paused", "не нашёл кнопку отправки"
+    before = sh(f"{B} text 20000").stdout                      # что было на странице ДО нажатия
+    seen = {m.group(0).lower() for m in SUCCESS.finditer(before)}
     c = sh(f"{B} click {btn[-1]} --token {token}", env={**os.environ})
     after, ok = "", False
     for _ in range(6):                                           # тост «спасибо» бывает на пару секунд — ловим чаще
         time.sleep(1.5)
-        after = sh(f"{B} text 4000").stdout
-        if SUCCESS.search(after):
+        after = sh(f"{B} text 20000").stdout
+        # успех — только НОВАЯ фраза: «успешном прохождении стажировки» в тексте вакансии — не подтверждение
+        if any(m.group(0).lower() not in seen for m in SUCCESS.finditer(after)) or \
+                SUCCESS.findall(after).__len__() > SUCCESS.findall(before).__len__():
             ok = True
             break
+    # браузер не пустил форму: обязательная галочка/поле (HTML5-подсказка) — точно не ушло
+    # (сама подсказка браузера в текст страницы не попадает — смотрим и на обязательную неотмеченную галочку в snap)
+    snap_after = sh(f"{B} snap").stdout
+    blocked = re.search(r"Please (check this box|fill (out|in) this field|select)|Заполните это поле|Отметьте этот флажок|"
+                        r"Выберите один из", after, re.I) or re.search(r"^\S+ checkbox .*\[ \] \*$", snap_after, re.M)
     sh(f"{B} shot {appdir}/after-submit.png")
     snap2 = sh(f"{B} snap").stdout
     (logs / "6-submit.txt").write_text(f"click rc={c.returncode}\n{c.stdout}{c.stderr}\n--- text\n{after}\n--- snap\n{snap2}",
@@ -454,6 +463,8 @@ def run(key):
     vals = [str(f.get("value")) for f in plan.get("fields", []) if f.get("value")]
     reset = not c.returncode and vals and not any(v in snap2 for v in vals) and \
         not re.search(r"ошибк|обязательн|некоррект|error|required|invalid", after, re.I)
+    if blocked:
+        ok = reset = False
     if c.returncode or not (ok or reset):
         subprocess.run(["tg", "send", "Не уверен, что отклик ушёл: на странице нет подтверждения. Проверь сам.",
                         "--photo", str(appdir / "after-submit.png")], capture_output=True)
