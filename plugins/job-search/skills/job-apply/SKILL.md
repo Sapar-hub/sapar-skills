@@ -77,6 +77,15 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
     invitation sets «В процессе» + «⚠ ДЕЙСТВИЕ НУЖНО» in F, a view adds a line to N. The
     `job-apply-hhstatus` timer (install-worker.sh, 10:43/15:43/20:43) runs it with `--apply --tg`. So
     always put the hh link in I or N when applying on hh.
+  - Mail statuses: `python3 -I scripts/mailstatus.py [--apply] [--tg] [--backtest N]` reads new Mail.ru
+    letters over IMAP (read-only; folders «Отклики», INBOX, INBOX/Newsletters; creds MAILRU_USER/
+    MAILRU_APPPASS from worker.env) and updates rows matched by the sender domain (mentions in H/I/N or
+    the ATS map) plus the vacancy title from the subject/body: a rejection closes an open row, an
+    interview/test/mail-confirmation sets «В процессе» + «⚠ ДЕЙСТВИЕ НУЖНО» in F (with the link TTL when
+    the letter states one), an ack/recruiter reply adds a line to N. Ambiguous letters (several rows of
+    one company, no title match) go only to the Telegram summary — rows are never touched on a guess.
+    The `job-apply-mailstatus` timer (install-worker.sh, hourly 08:17–23:17) runs it with `--apply --tg`;
+    read UIDs are stored in `mail-status.json` (first run only baselines, old letters are not processed).
   - hh answers a foreign exit with «VPN detected», so `browser.mjs start` sends hh.ru/hhcdn.ru past the
     proxy (`JOB_APPLY_DIRECT_HOSTS`, `;`-separated; the default is hh and psbank.ru — job.psbank.ru also rejects headless, apply there from a headed window). Never click «I'm not using a VPN».
 - **Preflight, before writing a resume.** Two checks, both advisory; show the result to the user in a line or two:
