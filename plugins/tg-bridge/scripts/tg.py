@@ -88,26 +88,8 @@ class Api:
             die(f"нет TG_TOKEN в {CONF}/env")
         self.base = f"https://api.telegram.org/bot{env['TG_TOKEN']}/"
         self.file_base = f"https://api.telegram.org/file/bot{env['TG_TOKEN']}/"
-        # Алерты идут через общий HTTP-мост :18080 (WG); всё остальное — из env.
-        cand = [p for p in (env.get("TG_PROXY"), "http://127.0.0.1:18080") if p]
-        seen, self.openers = set(), []
-        for p in cand:
-            if p in seen:
-                continue
-            seen.add(p)
-            self.openers.append(urllib.request.build_opener(urllib.request.ProxyHandler({"https": p})))
-        self.openers.append(urllib.request.build_opener())
-        self.opener = self.openers[0]
-
-    def _next_opener(self):
-        try:
-            i = self.openers.index(self.opener)
-        except ValueError:
-            return False
-        if i + 1 >= len(self.openers):
-            return False
-        self.opener = self.openers[i + 1]
-        return True
+        h = [urllib.request.ProxyHandler({"https": env["TG_PROXY"]})] if env.get("TG_PROXY") else []
+        self.opener = urllib.request.build_opener(*h)
 
     def call(self, method, files=None, timeout=70, **params):
         params = links_as_names(method, params)
@@ -124,10 +106,6 @@ class Api:
                     res = json.loads(r.read())
             except urllib.error.HTTPError as e:
                 res = json.loads(e.read() or b"{}")
-            except OSError as e:                      # прокси/сеть: пробуем следующий путь
-                if self._next_opener():
-                    continue
-                raise RuntimeError(f"{method}: {e}")
             if res.get("ok"):
                 return res["result"]
             retry = (res.get("parameters") or {}).get("retry_after")
