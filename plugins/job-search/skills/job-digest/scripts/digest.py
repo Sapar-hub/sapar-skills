@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """RSS (RSSHub/Telegram и любые ленты) -> фильтр по ключевым словам -> дайджест в папку Mail.ru.
 
-  digest.py run [--dry-run] [--force] [--tg] [--hh-days N]   # ленты + поиск hh (hh.txt) → почта (+ Telegram)
+  digest.py run [--dry-run] [--force] [--tg] [--hh-days N]   # ленты + поиск hh (hh.txt) + changellenge.com → почта (+ Telegram)
   digest.py show [--days N] [--all]     # вывести найденное из локальной базы
   digest.py feeds                       # проверить, что ленты отвечают
   digest.py tg <id>...                  # (пере)прислать посты в Telegram с кнопками
@@ -252,6 +252,184 @@ def hh_source(c, now, patterns, dry_run=False, days=None):
     return len(fresh), errors
 
 
+# --- Changellenge: сайт как источник (TG-канал недоступен без прокси) ---
+# Вакансии: sitemap-iblock-8.xml — полный список /vacancy/ с lastmod (листинг сайта отдаёт карточки
+# вперемешку, пагинацией всё не собрать). Свежие (≤ MAX_AGE_DAYS) URL → предфильтр по slug (город, направление)
+# → страница вакансии (название, работодатель, Формат/Город/Опыт/Тип, дедлайн) → фильтр keywords.txt.
+# Программы стажировок (Ozon Camp, ОТП…) живут в /event/, не в /vacancy/: берутся из листинга событий.
+# ~/.config/job-digest/changellenge.txt (необязательно): листинги событий, строка `<url> [pages=N]`.
+CL_BASE = "https://changellenge.com"
+CL_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157 Safari/537.36"
+CL_SITEMAP = f"{CL_BASE}/sitemap-iblock-8.xml"
+CL_DEFAULT = [f"{CL_BASE}/event/filter/type_activity-is-internship/apply/ pages=2"]
+CL_FEED = "Changellenge"
+CL_SLUG_PLACE = re.compile(r"-(moscow|remote|udalenno|online|all-cities)-?$")
+CL_SLUG_TOPIC = re.compile(r"analy|data|scien|(^|-)(ml|ai|bi|cv|nlp|llm|sql|dwh|etl)(-|$)|machine|python|research|neural|"
+                           r"product-analyst|computer-vision|quant|statist")
+CL_MONTH = re.compile(r"^\d{1,2} (января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)$", re.I)
+CL_PLACE_OK = re.compile(r"москв|онлайн|удал|remote|все города", re.I)
+CL_EV_NOT_CITY = {"онлайн", "it", "мы рекомендуем", "менеджмент", "аналитика", "финансы", "маркетинг", "дизайн",
+                  "консалтинг и аудит", "работодатель нового поколения", "инженерам и технологам", "стажировка"}
+
+
+def cl_get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": CL_UA, "Accept-Language": "ru"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def cl_txt(s):
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", s or ""))).strip()
+
+
+def cl_norm_url(u):
+    """Ссылка без utm/query и якоря, с хостом и слэшем на конце: так сравниваются с applied/history."""
+    u = (u or "").strip().split("#")[0].split("?")[0]
+    if u.startswith("/"):
+        u = CL_BASE + u
+    return u.rstrip("/") + "/" if "changellenge.com" in u else u
+
+
+def cl_listings():
+    p = CONF / "changellenge.txt"
+    out = []
+    for l in (read_list("changellenge.txt") if p.exists() else CL_DEFAULT):
+        url, *opts = l.split()
+        kv = dict(x.split("=", 1) for x in opts if "=" in x)
+        out.append((url, int(kv.get("pages", 1))))
+    return out
+
+
+def cl_events(page):
+    """Карточки листинга событий -> [dict(kind=e, id, title, url, company, tags)]."""
+    out = []
+    for eid, code, body in re.findall(r'<article class="event-card[^"]*"\s+data-id="(\d+)"\s+data-code="([^"]+)">(.*?)</article>',
+                                      page, flags=re.S):
+        title = re.search(r'aria-label="([^"]+)"', body)
+        sub = re.search(r'event-card__subtitle">(.*?)</div>', body, re.S)
+        city = re.search(r'promo-city">(.*?)</div>', body, re.S)
+        tags = [x for x in (cl_txt(t) for t in re.findall(r'class="event-card-tag[^"]*"[^>]*>(.*?)</(?:span|a)>', body, re.S)) if x]
+        out.append(dict(kind="e", id=eid, title=cl_txt(title.group(1)) if title else code, url=f"{CL_BASE}/event/{code}/",
+                        company=cl_txt(sub.group(1)).split("•")[0].strip() if sub else "",
+                        tags=tags + ([cl_txt(city.group(1))] if city else [])))
+    return out
+
+
+def cl_vacancy(url):
+    """Страница вакансии -> dict(title, company, posted, deadline, fields{Формат, Город, Занятость, Опыт, Тип вакансии})."""
+    page = cl_get(url)
+    text = cl_txt(page)
+    head = text[text.find("Назад к поиску"):][:600]
+    labels = ["Формат", "Город", "Занятость", "Опыт", "Тип вакансии", "Откликнуться"]
+    fields = {}
+    for lab in labels[:-1]:
+        m = re.search(rf"\b{lab} (.+?) (?:{'|'.join(labels)})\b", head)
+        if m:
+            fields[lab] = m.group(1).strip()
+    h1 = re.search(r"<h1[^>]*>(.*?)</h1>", page, re.S)
+    org = re.search(r'hiringOrganization.*?itemprop="name"[^>]*content="([^"]+)"', page, re.S)
+    posted = re.search(r'datePosted"? content="([\d-]+)"', page)
+    dl = re.search(r"\bдо (\d{1,2} (?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря))", text)
+    return dict(kind="v", id=url.rstrip("/").split("/")[-1], url=url, title=cl_txt(h1.group(1)) if h1 else "",
+                company=html.unescape(org.group(1)) if org else "", posted=posted.group(1) if posted else "",
+                deadline=dl.group(1) if dl else "", fields=fields)
+
+
+def cl_source(c, now, patterns, dry_run=False):
+    """Новые вакансии и программы стажировок с changellenge.com → пачки как у hh (matched=3, лента Changellenge).
+    Вакансия: направление по названию (как hh), исключения по названию и полям, город Москва/удалёнка, без «больше
+    1 года». Программа стажировок: названия общие («Стажировка в ОТП Банке») — берём все, кроме чужого города и
+    исключений по названию. Уже поданное (applied.tsv / history.tsv: ссылка без utm или «компания+должность») —
+    мимо. Каждый URL помнится в items (guid cl:v:<slug> / cl:e:<id>) и второй раз не открывается.
+    -> (новых подходящих, ошибок)"""
+    inc, exc, level, topic = patterns
+    urls, pairs, norm = applied_index()
+    urls = {cl_norm_url(u) for u in urls}
+    cutoff = (dt.date.today() - dt.timedelta(days=MAX_AGE_DAYS)).isoformat()
+    seen_db = lambda g: c.execute("select 1 from items where guid=?", (g,)).fetchone()
+    remember = lambda g, title, link, pub: dry_run or c.execute(
+        "insert or ignore into items(guid, feed, title, link, html, pub, matched, fetched_at, sent_at) values(?,?,?,?,?,?,?,?,?)",
+        (g, CL_FEED, title, link, "", pub or now, 0, now, now))
+    done = lambda v: cl_norm_url(v["url"]) in urls or bool(
+        v["company"] and (norm(v["company"]).split(" ")[0], norm(v["title"])[:30]) in pairs)
+    fresh, errors = [], 0
+
+    # 1) вакансии из sitemap
+    try:
+        sm = re.findall(r"<loc>(https://changellenge\.com/vacancy/[^<]+)</loc>\s*<lastmod>([^<]+)</lastmod>", cl_get(CL_SITEMAP))
+    except Exception as e:
+        print(f"WARN: changellenge sitemap: {e}", file=sys.stderr)
+        sm, errors = [], errors + 1
+    for url, lastmod in sorted(sm, key=lambda x: x[1], reverse=True):
+        if lastmod[:10] < cutoff:
+            continue
+        slug = url.rstrip("/").split("/")[-1]
+        g = f"cl:v:{slug}"
+        if seen_db(g):
+            continue
+        if not (CL_SLUG_PLACE.search(slug) and CL_SLUG_TOPIC.search(slug)):
+            remember(g, slug, url, lastmod[:10])                 # не Москва или не данные/ML по slug — не открываем
+            continue
+        try:
+            v = cl_vacancy(url)
+        except Exception as e:
+            print(f"WARN: changellenge {url}: {e}", file=sys.stderr)
+            errors += 1
+            continue
+        f = v["fields"]
+        det_s = " ".join(f.values())
+        ok = (any(p.search(v["title"]) for p in topic) and not any(p.search(f'{v["title"]} {det_s}') for p in exc)
+              and bool(CL_PLACE_OK.search(f.get("Город", "") + " " + f.get("Формат", "")) or CL_SLUG_PLACE.search(slug))
+              and "больше" not in f.get("Опыт", "").lower() and not (v["posted"] and v["posted"] < cutoff) and not done(v))
+        text = f'{v["title"]} — {v["company"]}' if v["company"] else v["title"]
+        remember(g, text, url, v["posted"] or lastmod[:10])
+        if ok:
+            fresh.append((text, url, " | ".join(x for x in (f.get("Город"), f.get("Формат"), f.get("Опыт"), f.get("Тип вакансии"),
+                                                             f'до {v["deadline"]}' if v["deadline"] else "") if x)))
+
+    # 2) программы стажировок из листинга событий
+    for url, pages in cl_listings():
+        ids = set()
+        for p in range(1, pages + 1):
+            u = url if p == 1 else f"{url}{'&' if '?' in url else '?'}PAGEN_1={p}"
+            try:
+                got = [x for x in cl_events(cl_get(u)) if x["id"] not in ids]
+            except Exception as e:
+                print(f"WARN: changellenge {u}: {e}", file=sys.stderr)
+                errors += 1
+                break
+            if not got:
+                break
+            ids.update(x["id"] for x in got)
+            for v in got:
+                g = f'cl:e:{v["id"]}'
+                if seen_db(g):
+                    continue
+                cities = [t for t in v["tags"] if not CL_MONTH.match(t) and t.lower() not in CL_EV_NOT_CITY]
+                ok = (not any(p.search(v["title"]) for p in exc) and not done(v)
+                      and (not cities or bool(CL_PLACE_OK.search(" ".join(v["tags"])))))
+                text = f'{v["title"]} — {v["company"]}' if v["company"] else v["title"]
+                remember(g, text, v["url"], now)
+                if ok:
+                    dl = next((t for t in v["tags"] if CL_MONTH.match(t)), "")
+                    fresh.append((text, v["url"], " | ".join(x for x in (", ".join(t for t in v["tags"] if not CL_MONTH.match(t)),
+                                                                         f"до {dl}" if dl else "", "программа стажировок") if x)))
+
+    for k in range(0, len(fresh), HH_BATCH):
+        part = fresh[k:k + HH_BATCH]
+        body = "<br>".join(f'<a href="{html.escape(u)}">{html.escape(t)}</a><br>{html.escape(d)}' for t, u, d in part)
+        row = (f"cl-batch:{now}:{k // HH_BATCH}", CL_FEED, f"Changellenge: {len(part)} вакансий", part[0][1], body, now, 3, now, None)
+        if dry_run:
+            print("--- changellenge ---\n" + "\n".join(f"{t} | {d} | {u}" for t, u, d in part))
+        else:
+            c.execute("insert or ignore into items(guid, feed, title, link, html, pub, matched, fetched_at, sent_at)"
+                      " values(?,?,?,?,?,?,?,?,?)", row)
+    if not dry_run:
+        c.commit()
+    print(f"changellenge: вакансий в sitemap {len(sm)}, новых подходящих {len(fresh)}" + (f", ошибок {errors}" if errors else ""))
+    return len(fresh), errors
+
+
 # --- база ---
 
 def db():
@@ -382,7 +560,9 @@ def cmd_run(a):
             new += cur.rowcount
     c.commit()
     _, hh_err = hh_source(c, now, patterns, a.dry_run, getattr(a, "hh_days", None))
-    if feeds and len(failed) == len(feeds) and (not hh_queries() or hh_err == len(hh_queries())):
+    _, cl_err = cl_source(c, now, patterns, a.dry_run)
+    cl_down = cl_err >= 1 + len(cl_listings())                           # не ответили ни sitemap, ни листинги
+    if feeds and len(failed) == len(feeds) and (not hh_queries() or hh_err == len(hh_queries())) and cl_down:
         all_feeds_down(len(feeds), a)                            # выходит с 75 → systemd повторит
 
     rows = [dict(zip(COLS, r)) for r in c.execute(
@@ -562,7 +742,7 @@ def cmd_show(a):
     q += "" if a.all else " and matched > 0"
     for rowid, feed, pub, link, h, title, m, state in db().execute(q + " order by pub desc", (since, since)):
         print(f"== #{rowid} | {feed} | {pub[:10]} | {link}{' | ' + state if state else ''}")
-        hs = strict_hits(dict(html=h, title=title, link=link), patterns) if m == 2 else hits(h, patterns)
+        hs = post_hits(dict(html=h, title=title, link=link, matched=m), patterns)
         for text, href, det in hs or [(title, "", "")]:
             print(f"  * {text}{' — ' + det if det else ''}{' <' + href + '>' if href else ''}")
 

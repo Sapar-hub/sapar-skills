@@ -55,6 +55,21 @@ Prefer tightening the filter over dropping a source. Posts older than 14 days
 (`JOB_DIGEST_MAX_AGE_DAYS`) are stored but not mailed, so a new feed's backlog stays out.
 The same vacancy link reposted by several channels is shown once.
 
+## Changellenge (site source, built in)
+
+`digest.py run` also reads changellenge.com directly over HTTP (no RSSHub, no browser):
+- vacancies from `sitemap-iblock-8.xml` (every `/vacancy/` URL with lastmod; the site's listing shuffles cards,
+  so pagination misses most of them): fresh URLs (≤ `JOB_DIGEST_MAX_AGE_DAYS`) → slug prefilter (Moscow/remote +
+  data/ML/analytics words) → the vacancy page (title, employer, Формат/Город/Опыт/Тип, «до …» deadline) → `keywords.txt`
+  (topic in the title, exclusions, no «больше 1 года»);
+- internship programmes (Ozon Camp, ОТП, X5…) from the event listing `/event/filter/type_activity-is-internship/apply/`
+  — they are not in `/vacancy/`. Titles are generic, so every programme passes except another city or a title exclusion.
+
+Found items go out like hh: batches of 8 (`matched=3`, feed «Changellenge»), each URL remembered as `cl:v:<slug>` /
+`cl:e:<id>`. Already applied = URL (without utm) or company+title in job-apply `applied.tsv` / `history.tsv`; when you
+apply through a Changellenge link, add that link to `history.tsv` as an alias line (`status` «алиас: …») so the digest
+and `precheck` see the duplicate. Optional `~/.config/job-digest/changellenge.txt`: event listings, `<url> [pages=N]`.
+
 ## Telegram (optional, plugin tg-bridge)
 
 When `tg` exists, `install.sh` runs `digest.py run --tg`. Each matching post also goes to the bot,
