@@ -23,7 +23,7 @@
 import { chromium } from 'playwright';
 import { claimBrowser, needToken, useToken, IS_SUBMIT_JS, ENTER_SUBMITS_JS, SUBMIT_RE } from './lock.mjs';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -246,6 +246,30 @@ async function oopifAct(page, ref, action, value) {
   if (!t) die(`нет iframe x${n} — сделай snap заново`);
   return cdpEval(t.webSocketDebuggerUrl, OOPIF_ACT(ref, action, value));
 }
+// живой ли браузер на CDP. HTTP с жёстким таймаутом: зависший Chromium принимает соединение и молчит,
+// а connectOverCDP свой timeout в этом случае не соблюдает
+async function cdpAlive(ms = 5000) {
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/json/version`, { signal: AbortSignal.timeout(ms) });
+    return r.ok;
+  } catch { return false; }
+}
+
+// процессы Chromium именно этого профиля и порта (по /proc, без pkill по шаблону) → SIGKILL; -> сколько убито
+function killStale() {
+  const prof = `--user-data-dir=${join(HOME, 'profile')}`, port = `--remote-debugging-port=${PORT}`;
+  let n = 0;
+  for (const pid of readdirSync('/proc').filter((d) => /^\d+$/.test(d) && Number(d) !== process.pid)) {
+    let cmd = '';
+    try { cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8'); } catch { continue; }
+    const argv = cmd.split(/[\0 ]/);                   // Chromium переписывает argv: аргументы через пробел, не \0
+    if (argv.includes(prof) && argv.includes(port)) { try { process.kill(Number(pid), 'SIGKILL'); n++; } catch {} }
+  }
+  for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) rmSync(join(HOME, 'profile', f), { force: true });
+  if (n) console.error(`WARN: браузер не отвечал на ${CDP} — убил ${n} зависших процессов`);
+  return n;
+}
+
 const isX = (ref) => /^x\d+e\d+$/.test(ref || '');
 
 async function settle(page) {
@@ -266,7 +290,9 @@ async function retry(fn, page) {
 const cmds = {
   async start(args) {
     mkdirSync(join(HOME, 'profile'), { recursive: true });
-    try { await (await chromium.connectOverCDP(CDP)).close(); return console.log('OK: уже запущен'); } catch {}
+    if (await cdpAlive()) return console.log('OK: уже запущен');
+    // порт не отвечает, а процесс жив (Xvfb умер под окном → Chromium висит): без этого connect ждал бесконечно
+    if (killStale()) await new Promise((r) => setTimeout(r, 1500));
     const flags = [`--remote-debugging-port=${PORT}`, '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${join(HOME, 'profile')}`, '--no-first-run', '--no-default-browser-check', '--lang=ru-RU', '--window-size=1400,1000'];
     // --offscreen: настоящее окно (WAF вроде job.psbank.ru режут headless), но на невидимом Xvfb (JOB_APPLY_XVFB, :99),
@@ -291,7 +317,7 @@ const cmds = {
     spawn(chromium.executablePath(), [...flags, 'about:blank'], { detached: true, stdio: ['ignore', log, log], env }).unref();
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 250));
-      try { await (await chromium.connectOverCDP(CDP)).close(); return console.log(`OK: браузер на ${CDP}`); } catch {}
+      if (await cdpAlive(1000)) return console.log(`OK: браузер на ${CDP}`);
     }
     die(`не поднялся, смотри ${join(HOME, 'chrome.log')}`);
   },

@@ -15,8 +15,8 @@ HH_ONCALENDAR=${HH_ONCALENDAR:-'*-*-* 10,15,20:43:00'}
 MAIL_ONCALENDAR=${MAIL_ONCALENDAR:-'*-*-* 08..23:17:00'}
 
 if [ "${1:-}" = uninstall ]; then
-  systemctl --user disable --now job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer job-apply-mailstatus.timer 2>/dev/null || true
-  rm -f "$UNIT_DIR"/job-apply-worker.{service,timer} "$UNIT_DIR"/job-apply-topics.{service,timer} "$UNIT_DIR"/job-apply-hhstatus.{service,timer} "$UNIT_DIR"/job-apply-mailstatus.{service,timer}
+  systemctl --user disable --now job-apply-xvfb.service job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer job-apply-mailstatus.timer 2>/dev/null || true
+  rm -f "$UNIT_DIR"/job-apply-xvfb.service "$UNIT_DIR"/job-apply-worker.{service,timer} "$UNIT_DIR"/job-apply-topics.{service,timer} "$UNIT_DIR"/job-apply-hhstatus.{service,timer} "$UNIT_DIR"/job-apply-mailstatus.{service,timer}
   systemctl --user daemon-reload
   echo "OK: удалено"; exit 0
 fi
@@ -81,6 +81,19 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+# невидимый дисплей для браузера таймеров (browser.mjs start --offscreen → DISPLAY=:99). Без него окно падает в headless,
+# а если :99 пропадёт под живым окном, Chromium виснет (start это лечит, но дисплей у job-apply должен быть свой)
+cat > "$UNIT_DIR/job-apply-xvfb.service" <<EOF
+[Unit]
+Description=job-apply: invisible X display :99 for the timer browser
+
+[Service]
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1400x1000x24 -nolisten tcp
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
 # статусы откликов на hh → трекер (hhstatus.py сам поднимает браузер; hh ходит мимо прокси — browser.mjs)
 cat > "$UNIT_DIR/job-apply-hhstatus.service" <<EOF
 [Unit]
@@ -138,5 +151,5 @@ if [ -n "$TG" ]; then
   "$TG" action add cv -- "$PY" -I "$HERE/board.py" cv {arg} >/dev/null          # deep link «резюме» в /tracker
 fi
 systemctl --user daemon-reload
-systemctl --user enable --now job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer job-apply-mailstatus.timer >/dev/null
+systemctl --user enable --now job-apply-xvfb.service job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer job-apply-mailstatus.timer >/dev/null
 echo "OK: job-apply-worker.service + timer ($ONCALENDAR), job-apply-topics.timer ($TOPICS_ONCALENDAR), job-apply-hhstatus.timer ($HH_ONCALENDAR), job-apply-mailstatus.timer ($MAIL_ONCALENDAR)${TG:+, команды /queue /tracker /contacts /cleanup}"
