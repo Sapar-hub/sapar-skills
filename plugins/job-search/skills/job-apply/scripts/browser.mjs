@@ -189,6 +189,29 @@ function cdpEval(wsUrl, expression) {
   });
 }
 
+// файл в <input type=file> внутри iframe x…: объект элемента по data-jref → DOM.setFileInputFiles (сам шлёт input/change)
+function cdpUpload(wsUrl, ref, file) {
+  return new Promise((ok, fail) => {
+    const ws = new WebSocket(wsUrl);
+    const timer = setTimeout(() => { ws.close(); fail(new Error('iframe не ответил за 15 с')); }, 15000);
+    const done = (f, v) => { clearTimeout(timer); ws.close(); f(v); };
+    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate',
+      params: { expression: `document.querySelector('[data-jref="${ref}"]')` } }));
+    ws.onmessage = (m) => {
+      const r = JSON.parse(m.data);
+      if (r.id === 1) {
+        const id = r.result?.result?.objectId;
+        if (!id) return done(fail, new Error(`нет ${ref} — сделай snap заново`));
+        ws.send(JSON.stringify({ id: 2, method: 'DOM.setFileInputFiles', params: { files: [file], objectId: id } }));
+      } else if (r.id === 2) {
+        if (r.error) done(fail, new Error(r.error.message || 'setFileInputFiles не сработал'));
+        else done(ok, 'OK');
+      }
+    };
+    ws.onerror = () => done(fail, new Error('нет связи с iframe'));
+  });
+}
+
 // действие над элементом в iframe; el — элемент по data-jref
 const OOPIF_ACT = (ref, action, value) => `(() => {
   const el = document.querySelector('[data-jref="${ref}"]');
@@ -457,7 +480,12 @@ const cmds = {
   },
   async upload([ref, file], { page }) {
     if (!existsSync(file)) die(`нет файла ${file}`);
-    await locate(page, ref).setInputFiles(resolve(file));
+    if (isX(ref)) {                                          // поле в iframe другого сайта (Авито: careers.avito.ru)
+      const n = Number(/^x(\d+)e\d+$/.exec(ref)[1]);
+      const t = (await oopifs(page))[n];
+      if (!t) die(`нет iframe x${n} — сделай snap заново`);
+      await cdpUpload(t.webSocketDebuggerUrl, ref, resolve(file));
+    } else await locate(page, ref).setInputFiles(resolve(file));
     await settle(page);
     console.log('OK');
   },

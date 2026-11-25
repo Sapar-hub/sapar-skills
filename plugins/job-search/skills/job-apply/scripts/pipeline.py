@@ -11,13 +11,16 @@
   2. план       — claude -p, без браузера: tailored-резюме (check + render), fill-plan.json, tracker-row.json,
                   при нехватке данных — tg ask. Итог: PLAN: ok | skip — причина
   3. заполнение — исполнитель строго по fill-plan.json, без отправки
-  4. проверка   — verify.py: форма = план (иначе заполнение ещё раз, потом пауза)
+  4. проверка   — verify.py: форма = план (иначе заполнение ещё раз, потом ремонт)
+     ремонт     — claude -p с браузером: цель «форма = план», значения из плана, способ ввода свободный
+                  (кастомные списки, «свой вариант», iframe); новый вопрос формы — tg ask; потом снова verify.
+                  Не сошлось и после ремонта — manual
   5. гейт       — gate.py: скрин + PDF + значения из плана → «отправить» в Telegram → одноразовый токен
   6. отправка   — КОД, не модель: кнопка отправки из снимка формы, click --token, проверка «спасибо/отправлено»
   7. учёт       — applied.tsv, job_tracker (tracker.py: web app или outbox)
   8. hh.ru      — после отклика на сайте: second.py after ищет ту же вакансию на hh → в очередь вторым каналом
 Итог в stdout последней строкой: STATUS: done|skipped|paused|failed|manual — … (как у старого worker'а).
-manual — заполнение не сошлось с планом за 2 раунда: значения из плана уходят пользователю (manual.md + TG),
+manual — заполнение не сошлось с планом за 2 раунда и ремонт не помог: значения из плана уходят пользователю (manual.md + TG),
   очередь не останавливается. Рецепты сайтов (устройство формы, общее для сайта): references/sites/<хост>.md
   + $JOB_APPLY_HOME/sites/<хост>.md (NOTE-строки исполнителя из удачных заполнений) — в промптах плана и заполнения.
 
@@ -149,10 +152,10 @@ def executor(prompt, log, timeout=600, tries=2):
     return ""
 
 
-def planner(prompt, appdir, log, timeout=900):
-    """claude -p без браузера: только чтение, запись в папку отклика, resume.mjs, tg. -> финальный текст."""
-    allowed = ["Read", "Write", "Edit", "Glob", "Grep", f"Bash(node {HERE}/resume.mjs:*)", "Bash(tg:*)",
-               "Bash(pdftoppm:*)"]
+def planner(prompt, appdir, log, timeout=900, allowed=None):
+    """claude -p: по умолчанию без браузера — только чтение, запись в папку отклика, resume.mjs, tg. -> финальный текст."""
+    allowed = allowed or ["Read", "Write", "Edit", "Glob", "Grep", f"Bash(node {HERE}/resume.mjs:*)", "Bash(tg:*)",
+                          "Bash(pdftoppm:*)"]
     cmd = [CLAUDE, "-p", prompt, "--output-format", "json", "--permission-mode", "acceptEdits",
            "--allowedTools", *allowed, "--add-dir", str(appdir), "--add-dir", str(CONF), "--add-dir", str(HOME)]
     if shutil.which("fish"):                                     # креды из config.fish (как у остальных прогонов)
@@ -240,6 +243,32 @@ FILL = """Ты исполнитель. ЗАПОЛНИ открытую форм�
 Если узнал о форме неочевидное и общее для этого сайта (каким вызовом выбирается список, какое поле появляется после
 выбора, как вводится дата/телефон) — в последнем сообщении перед строкой FILL напиши это строками «NOTE: …»
 (без личных данных, только устройство формы). Последняя строка: FILL: ok   или   FILL: mismatch — <какое поле и почему>"""
+
+
+REPAIR = """Ты чинишь форму отклика: исполнитель дважды заполнил её не по плану. Вкладка с формой уже открыта — работай в ней.
+План: {appdir}/fill-plan.json (прочитай). Расхождения, которые нашла проверка кодом:
+{problems}
+Цель: форма = план. Значения — ТОЛЬКО из плана, дословно. Способ ввода любой: кастомные списки, радио/«свой вариант»
+с полем ввода, поля в iframe (ref вида f2e5 / x0e5), скрытые поля за «Добавить»/«Раскрыть», баннеры поверх формы.
+Команды: {B} snap | text 6000 | shot (потом Read {home}/shot.png) | fill <ref> <текст> | fill --type <ref> <текст> |
+  upload <ref> <файл> | check <ref> | select <ref> <пункт> | antselect <ref> <текст> | pick <текст> | click <ref> | press <клавиша>
+Нельзя: отправлять форму (кнопка отправки заблокирована кодом — не пытайся); вписывать что-либо не из плана или
+менять значения плана; уходить на другие страницы и сайты; свои скрипты.
+Файл «не загружен», а имя файла есть в text страницы — он загружен, не загружай заново.
+Обязательное поле, для которого в плане нет значения (новый вопрос формы), — не придумывай. Спроси пользователя:
+  tg ask "{head}: <вопрос формы дословно> (варианты: …)" --text
+Ответил — впиши ответ и добавь поле в "fields" плана (Edit fill-plan.json: {{"label": …, "value": …}}), иначе проверка
+сочтёт его лишним. Нет ответа — оставь поле пустым и закончи mismatch.
+В конце snap и сверь с планом. Неочевидное устройство формы, общее для этого сайта, — строки «NOTE: …» (без личных
+данных). Последняя строка: REPAIR: ok   или   REPAIR: mismatch — <что не вышло и почему>"""
+
+
+def repair(appdir, problems, log):
+    """claude -p с браузером чинит форму под план (значения фиксированы, способ ввода свободный). -> текст ответа."""
+    plan = json.loads((appdir / "fill-plan.json").read_text(encoding="utf-8"))
+    head = f"{plan.get('company', '?')} — {plan.get('title', '?')}"
+    prompt = REPAIR.format(B=B, appdir=appdir, problems=problems.strip(), home=HOME, head=head.replace('"', "'"))
+    return planner(prompt, appdir, log, allowed=["Read", "Edit", f"Bash(node {HERE}/browser.mjs:*)", "Bash(tg:*)"])
 
 
 # Рецепты сайтов: устройство формы, общее для всех вакансий одного сайта (VK, Сбер, Ozon… — шаблонные).
@@ -414,7 +443,13 @@ def run(key):
             if round_ < 2:
                 extra = f"Прошлая попытка не совпала с планом:\n{v.stdout}\nИсправь именно это.\n"
                 continue
-            return handoff(appdir, f"заполнение не сошлось с планом: {v.stdout.strip()[:200]}")
+            st.step("ремонт формы")                              # Claude с браузером: цель — форма = план
+            out = repair(appdir, v.stdout, logs / f"3-repair-{round_}.json")
+            v = sh([sys.executable, "-I", str(HERE / "verify.py"), str(appdir)])
+            st.step("ремонт формы", "совпадает с планом" if v.returncode == 0
+                    else (last_line(out, "REPAIR") or out[-80:] or "нет ответа")[:80])
+            if v.returncode:
+                return handoff(appdir, f"заполнение не сошлось с планом (и после ремонта): {v.stdout.strip()[:200]}")
         learn(url, out)
         st.step("подтверждение", "жду тебя в чате")
         g = sh([sys.executable, "-I", str(HERE / "gate.py"), str(appdir)])
