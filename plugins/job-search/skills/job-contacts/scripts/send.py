@@ -88,6 +88,8 @@ def main():
                    help="ответ в ветку на последнее письмо от --to (In-Reply-To/References, цитата); "
                         "не считается касанием и не упирается в 7 дней")
     p.add_argument("--reply-msgid", help="ответ на конкретное письмо по Message-ID (вместо последнего)")
+    p.add_argument("--rows", default="", help="строки job_tracker, к которым относится письмо (45,48): "
+                   "по ним autoclose.py закроет отклик, если ответа не будет")
     a = p.parse_args()
     a.reply = a.reply or bool(a.reply_msgid)
     if not a.reply and not a.subject:
@@ -160,7 +162,7 @@ def main():
     except Exception as e:
         print(f"⚠ письмо ушло, но копия в «{SENT_FOLDER}» не легла: {e}", file=sys.stderr)
     C.cmd_log(argparse.Namespace(value=to, action="answered" if a.reply else "followup" if a.followup else "sent",
-                                 note=f"email: {a.subject}", checked=True))
+                                 note=f"email: {a.subject}" + (f" rows={a.rows}" if a.rows else ""), checked=True))
     print("ОТПРАВЛЕНО")
 
 

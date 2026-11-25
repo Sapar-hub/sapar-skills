@@ -11,6 +11,9 @@
 //                                                [{id, url, title, employer, exp, address, applied}]
 //   hh.mjs negotiations [--json]               мои отклики на hh со статусом: TSV <статус> <дата> <url> <должность>
 //                                                <работодатель>; статус = invitation|rejection|viewed|not-viewed|<тег hh>
+//   hh.mjs chat <id вакансии> [--send-file F]   чат с работодателем по отклику, JSON {found, open, remind, tail, chat,
+//                                                sent}: open — есть поле ввода (работодатель не закрыл переписку);
+//                                                --send-file — отправить текст из файла (только если open)
 //
 // Что синхронизируется: per-resume поля hh — «Обо мне» (about + проекты + публикации), ключевые навыки,
 // уровень дохода (всегда пусто). Название/профессия, опыт, образование, контакты — общие в профиле hh,
@@ -292,8 +295,57 @@ async function negotiations(asJson) {
   else for (const r of rows) say([r.status, r.date, r.url, r.title, r.company].map((v) => clean(v).replace(/\t/g, ' ')).join('\t'));
 }
 
+// --- чат по отклику: открыт ли (есть поле ввода), хвост переписки, отправка ---
+async function chat(vid, sendText) {
+  const { browser, page } = await connect();
+  const res = { vacancy: vid, found: false };
+  try {
+    for (let n = 0; n < 20; n++) {
+      await open(page, `https://hh.ru/applicant/negotiations?filter=all&page=${n}`);
+      const item = page.locator('[data-qa="negotiations-item"]')
+        .filter({ has: page.locator(`a[href*="/vacancy/${vid}"]`) }).first();
+      if (await item.count()) {
+        res.found = true;
+        await item.getByRole('button', { name: /chat|чат/i }).first().click();
+        break;
+      }
+      if (!(await page.locator('[data-qa="pager-next"]').count())) break;
+    }
+    if (!res.found) return;
+    let fr = null;
+    for (let i = 0; i < 60 && !fr; i++) {
+      await page.waitForTimeout(250);
+      fr = page.frames().find((f) => /chatik\.hh\.ru\/chat\/\d+/.test(f.url()));
+    }
+    if (!fr) die('чат не открылся');
+    await page.waitForTimeout(2000);                         // переписка дорисовывается после загрузки фрейма
+    res.chat = fr.url().split('?')[0];
+    const ta = fr.locator('textarea');
+    res.open = (await ta.count()) > 0 && await ta.first().isEnabled().catch(() => false);
+    res.remind = (await fr.getByRole('button', { name: /Напомнить об отклике/ }).count()) > 0;
+    const body = await fr.locator('body').innerText().catch(() => '');
+    res.tail = clean(body).slice(-600);
+    if (sendText) {
+      if (!res.open) die('чат закрыт работодателем — писать нельзя');
+      await ta.first().fill(sendText);
+      await ta.first().press('Enter');                       // Enter — отправить, Shift+Enter — новая строка
+      await page.waitForTimeout(2500);
+      const after = clean(await fr.locator('body').innerText().catch(() => ''));
+      res.sent = after.includes(clean(sendText).slice(0, 40)) && (await ta.first().inputValue().catch(() => 'x')) === '';
+    }
+  } finally {
+    await page.close(); await browser.close();
+    say(JSON.stringify(res));
+  }
+}
+
 const [cmd, ...args] = process.argv.slice(2);
-if (cmd === 'resumes') {
+if (cmd === 'chat') {
+  const vid = (args[0] || '').match(/\d+/)?.[0];
+  if (!vid) die('hh.mjs chat <id вакансии> [--send-file F]');
+  const i = args.indexOf('--send-file');
+  await chat(vid, i >= 0 ? readFileSync(args[i + 1], 'utf8').trim() : '');
+} else if (cmd === 'resumes') {
   await listResumes();
 } else if (cmd === 'map') {
   const m = loadMap();

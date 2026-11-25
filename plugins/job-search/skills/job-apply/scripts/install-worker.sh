@@ -13,10 +13,12 @@ TOPICS_ONCALENDAR=${TOPICS_ONCALENDAR:-'*-*-* 21:47'}
 HH_ONCALENDAR=${HH_ONCALENDAR:-'*-*-* 10,15,20:43:00'}
 # письма о статусах (Mail.ru IMAP) → трекер, сводка в Telegram (job-apply-mailstatus)
 MAIL_ONCALENDAR=${MAIL_ONCALENDAR:-'*-*-* 08..23:17:00'}
+# напоминание в открытые чаты hh + автозакрытие после игнора (hhchat.py, autoclose.py)
+FOLLOWUP_ONCALENDAR=${FOLLOWUP_ONCALENDAR:-'*-*-* 13:37:00'}
 
 if [ "${1:-}" = uninstall ]; then
-  systemctl --user disable --now job-apply-xvfb.service job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer job-apply-mailstatus.timer 2>/dev/null || true
-  rm -f "$UNIT_DIR"/job-apply-xvfb.service "$UNIT_DIR"/job-apply-worker.{service,timer} "$UNIT_DIR"/job-apply-topics.{service,timer} "$UNIT_DIR"/job-apply-hhstatus.{service,timer} "$UNIT_DIR"/job-apply-mailstatus.{service,timer}
+  systemctl --user disable --now job-apply-xvfb.service job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer job-apply-mailstatus.timer job-apply-followup.timer 2>/dev/null || true
+  rm -f "$UNIT_DIR"/job-apply-xvfb.service "$UNIT_DIR"/job-apply-worker.{service,timer} "$UNIT_DIR"/job-apply-topics.{service,timer} "$UNIT_DIR"/job-apply-hhstatus.{service,timer} "$UNIT_DIR"/job-apply-mailstatus.{service,timer} "$UNIT_DIR"/job-apply-followup.{service,timer}
   systemctl --user daemon-reload
   echo "OK: удалено"; exit 0
 fi
@@ -140,6 +142,29 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+cat > "$UNIT_DIR/job-apply-followup.service" <<EOF
+[Unit]
+Description=job-apply: hh chat reminders, then auto-close ignored applications
+
+[Service]
+Type=oneshot
+EnvironmentFile=-$ENVF
+Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=/usr/bin/env python3 -I $HERE/hhchat.py --apply --tg
+ExecStart=/usr/bin/env python3 -I $HERE/autoclose.py --apply --tg
+TimeoutStartSec=40min
+EOF
+cat > "$UNIT_DIR/job-apply-followup.timer" <<EOF
+[Unit]
+Description=job-apply: daily follow-up (hh chats) and auto-close
+
+[Timer]
+OnCalendar=$FOLLOWUP_ONCALENDAR
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
 TG=$(command -v tg || { [ -x "$HOME/.local/bin/tg" ] && echo "$HOME/.local/bin/tg"; } || true)
 if [ -n "$TG" ]; then
   PY=$(command -v python3)
@@ -151,5 +176,5 @@ if [ -n "$TG" ]; then
   "$TG" action add cv -- "$PY" -I "$HERE/board.py" cv {arg} >/dev/null          # deep link «резюме» в /tracker
 fi
 systemctl --user daemon-reload
-systemctl --user enable --now job-apply-xvfb.service job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer job-apply-mailstatus.timer >/dev/null
+systemctl --user enable --now job-apply-xvfb.service job-apply-worker.timer job-apply-topics.timer job-apply-hhstatus.timer job-apply-mailstatus.timer job-apply-followup.timer >/dev/null
 echo "OK: job-apply-worker.service + timer ($ONCALENDAR), job-apply-topics.timer ($TOPICS_ONCALENDAR), job-apply-hhstatus.timer ($HH_ONCALENDAR), job-apply-mailstatus.timer ($MAIL_ONCALENDAR)${TG:+, команды /queue /tracker /contacts /cleanup}"

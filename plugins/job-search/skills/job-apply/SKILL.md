@@ -69,7 +69,10 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
   - Shared hh profile parts (experience, education, contacts, languages) are not synced: keep them
     consistent with master.yaml by hand; experience entries can be attached per resume (checkboxes in
     the workplace editor).
-  - Never: hh chats with employers on the user's behalf, «Apply with another resume» to re-apply, raising
+  - hh chat: only `scripts/hhchat.py` writes there (one templated reminder per vacancy, ≥5 working days after the
+    application, through a Telegram gate; a closed chat — «переписка будет доступна после приглашения» — is only
+    noted). `hh.mjs chat <id>` reads a chat's state. No free-form chatting with employers on the user's behalf.
+  - Never: «Apply with another resume» to re-apply, raising
     a resume with paid services. If the session is gone (login form instead of the «Resume and profile»
     menu), ask the user to log in again in the open window (`goto https://hh.ru/account/login`).
   - Statuses: `python3 -I scripts/hhstatus.py [--apply] [--tg]` reads hh «Отклики» (`hh.mjs negotiations`)
@@ -86,6 +89,12 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
     one company, no title match) go only to the Telegram summary — rows are never touched on a guess.
     The `job-apply-mailstatus` timer (install-worker.sh, hourly 08:17–23:17) runs it with `--apply --tg`;
     read UIDs are stored in `mail-status.json` (first run only baselines, old letters are not processed).
+  - Follow-up and closing (`job-apply-followup` timer, daily 13:37): `hhchat.py --apply --tg` writes the reminder into
+    open hh chats (skips rows with a future date in F and rows emailed in the last 7 days), then
+    `autoclose.py --apply --tg` closes rows still «Ожидание ответа» when the last touch (letter, reminder, hh chat)
+    got no answer for 14 days (`--days`). Rows are found by `rows=` in outreach.tsv — pass `send.py --rows 45,48`;
+    a letter without it closes a row only when the company has a single open row. A future date in F = planned wait,
+    never auto-closed; «В процессе» is never auto-closed.
   - hh answers a foreign exit with «VPN detected», so `browser.mjs start` sends hh.ru/hhcdn.ru past the
     proxy (`JOB_APPLY_DIRECT_HOSTS`, `;`-separated; the default is hh and psbank.ru — job.psbank.ru also rejects headless, apply there from a headed window). Never click «I'm not using a VPN».
 - **Preflight, before writing a resume.** Two checks, both advisory; show the result to the user in a line or two:
