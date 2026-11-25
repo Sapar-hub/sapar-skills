@@ -52,7 +52,13 @@ def same_long(got, want):
     return len(g) >= 90 and w.startswith(g)
 
 
-def check(plan, items):
+def page_text():
+    """Текст страницы: после загрузки многие формы (Ozon) убирают input и показывают имя файла простым текстом."""
+    p = subprocess.run(["node", str(HERE / "browser.mjs"), "text", "20000"], capture_output=True, text=True)
+    return p.stdout if p.returncode == 0 else ""
+
+
+def check(plan, items, text=None):
     problems, used = [], set()
     for f in plan.get("fields", []):
         label = f.get("label", "?")
@@ -72,6 +78,10 @@ def check(plan, items):
             # после загрузки многие формы прячут input и показывают «Открепить файл»/имя файла
             hit += [i for i in items if not hit and (name in i["label"] or ATTACHED.search(i["label"]))]
             if not hit:
+                if text is None:
+                    text = page_text()
+                if name in text:                         # имя файла в тексте страницы = файл прикреплён
+                    continue
                 problems.append(f"файл не загружен: {name} ({label})")
             used.update(i["ref"] for i in hit)
         elif f.get("check"):
@@ -92,9 +102,10 @@ def main():
         sys.exit(__doc__)
     d = Path(sys.argv[1])
     plan = json.loads((d / "fill-plan.json").read_text(encoding="utf-8"))
-    text = Path(sys.argv[sys.argv.index("--snap") + 1]).read_text() if "--snap" in sys.argv else snap()
+    offline = "--snap" in sys.argv
+    text = Path(sys.argv[sys.argv.index("--snap") + 1]).read_text() if offline else snap()
     (d / "verify-snap.txt").write_text(text, encoding="utf-8")
-    problems = check(plan, parse(text))
+    problems = check(plan, parse(text), "" if offline else None)
     for p in problems:
         print(f"- {p}")
     print("VERIFY: ok" if not problems else "VERIFY: mismatch")
