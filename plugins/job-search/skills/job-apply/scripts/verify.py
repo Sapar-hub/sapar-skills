@@ -86,7 +86,8 @@ def check(plan, items, text=None):
             used.update(i["ref"] for i in hit)
         elif f.get("check"):
             hit = [i for i in items if i["kind"] in ("checkbox", "radio") and norm(label)[:25] in norm(i["label"])]
-            if not hit or "[x]" not in hit[0]["rest"]:
+            # одинаковые подписи («Own variant» в двух вопросах): достаточно, что отмечен один из них
+            if not any("[x]" in i["rest"] for i in hit):
                 problems.append(f"не отмечено: {label}")
             used.update(i["ref"] for i in hit)
     for i in items:                                     # лишнее: заполнено, но в плане такого нет

@@ -31,7 +31,9 @@ def hh_find(title, company):
         if parts[0] in ("FOUND", "APPLIED") and len(parts) >= 4:
             return parts[0], parts[1], parts[2], parts[3]
     if p.returncode:
-        print(f"WARN hh find «{title}» / {company}: {p.stderr.strip()[-200:]}", file=sys.stderr)
+        err = p.stderr.strip()[-200:]
+        print(f"WARN hh find «{title}» / {company}: {err}", file=sys.stderr)
+        return "ERROR", err, "", ""                     # сбой поиска (слетела сессия и т.п.) ≠ «вакансии нет»
     return None
 
 
@@ -48,6 +50,11 @@ def cmd_after(a):
     if "hh.ru" in plan.get("url", ""):
         return                                                    # уже hh
     hit = hh_find(plan.get("title", ""), plan.get("company", ""))
+    if hit and hit[0] == "ERROR":
+        msg = f"hh второй канал не проверен ({plan.get('company', '')} — {plan.get('title', '')}): {hit[1]}"
+        print("hh: " + msg)
+        subprocess.run(["tg", "send", msg + f"\nПосле входа в hh: second.py after {a.appdir} {a.key}"], capture_output=True)
+        sys.exit(1)
     if not hit:
         print("hh: вакансии нет")
     elif hit[0] == "APPLIED":
@@ -72,6 +79,8 @@ def cmd_scan(a):
             continue
         hit = hh_find(title, company)
         tag = f"#{r['row']} {company} — {title[:50]}"
+        if hit and hit[0] == "ERROR":
+            sys.exit(f"стоп: поиск на hh не работает ({hit[1]}) — дальше «нет на hh» было бы враньём")
         if not hit:
             print(f"нет на hh: {tag}")
         elif hit[0] == "APPLIED":

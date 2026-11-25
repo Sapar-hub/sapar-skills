@@ -78,7 +78,9 @@ def main():
         if r:
             print(r["key"])
     elif a.cmd == "add":
-        if any(r["key"] == a.key or (a.href and r["href"] == a.href) for r in rows):
+        # тот же href у родителя «<ключ>.hh» — не дубль: родитель (ссылка из дайджеста на hh) откликался на сайте
+        if any(r["key"] == a.key or (a.href and r["href"] == a.href and not a.key.startswith(r["key"] + "."))
+               for r in rows):
             print(f"{a.key}: уже в очереди")
             return
         import time
