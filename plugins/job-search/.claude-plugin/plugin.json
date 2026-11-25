@@ -1,6 +1,6 @@
 {
   "name": "job-search",
-  "version": "1.22.1",
+  "version": "1.22.2",
   "description": "Job search for AI agents: daily vacancy digest from Telegram/RSS into Mail.ru, applying on employers' own career sites with a tailored resume, and reaching recruiters and team leads directly from public sources, plus a meetup digest with an «Иду» button, a goal ping the day before and a debrief ping after.",
   "author": {
     "name": "Sapar",

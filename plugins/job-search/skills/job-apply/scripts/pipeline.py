@@ -23,7 +23,7 @@ manual — заполнение не сошлось с планом за 2 ра�
 
 Окружение: JOB_APPLY_RUN и TG_THREAD ставит worker.sh. Исполнитель: OpenCode с изолированным конфигом
 ~/.config/job-apply/opencode-executor (allowlist), из чистой папки в /tmp, с таймаутом и одним повтором.
-Лимит провайдера (429): JOB_APPLY_EXEC_FALLBACK=<провайдер/модель> (worker.env, провайдер — в конфиге исполнителя)
+Лимит провайдера (429): JOB_APPLY_EXEC_FALLBACK=<провайдер/модель>[,<следующая>…] (worker.env, провайдер — в конфиге исполнителя)
 — переход на запасную модель до конца прогона; без неё — «usage limit» в STATUS, worker.sh возвращает вакансию в очередь.
 """
 import json, os, re, shutil, subprocess, sys, tempfile, time
@@ -80,10 +80,12 @@ class ExecutorLimit(Exception):
     pass
 
 
-# Запасная модель исполнителя (OpenCode «провайдер/модель», напр. qwen/qwen3.8-max): берётся, когда основная
-# упёрлась в лимит, и остаётся до конца прогона. Провайдер описан в opencode-executor/opencode.jsonc, ключ — в worker.env.
-FALLBACK = os.environ.get("JOB_APPLY_EXEC_FALLBACK", "").strip()
+# Запасные модели исполнителя (OpenCode «провайдер/модель» через запятую, по порядку, напр.
+# opencode/hy4-flash-free,qwen/qwen3.8-max): при лимите текущей берётся следующая ещё не упёршаяся, и она остаётся
+# до конца прогона. Провайдеры описаны в opencode-executor/opencode.jsonc, ключи — в worker.env.
+FALLBACKS = [m.strip() for m in os.environ.get("JOB_APPLY_EXEC_FALLBACK", "").split(",") if m.strip()]
 MODEL = None                                                      # None — модель из конфига исполнителя
+LIMITED = set()                                                   # модели, упёршиеся в лимит в этом прогоне
 
 
 def provider_limit(out):
@@ -120,10 +122,12 @@ def executor(prompt, log, timeout=600, tries=2):
         if lim:
             # лимит провайдера: повтор той же модели не поможет — переходим на запасную (если есть),
             # иначе ExecutorLimit: текст «usage limit» ловит worker.sh, вернёт вакансию в очередь и остановится
-            if FALLBACK and MODEL != FALLBACK:
-                MODEL, attempt = FALLBACK, attempt - 1
+            LIMITED.add(MODEL)
+            nxt = next((m for m in FALLBACKS if m not in LIMITED), None)
+            if nxt:
                 if ST:
-                    ST.step("исполнитель", f"лимит основной модели → {FALLBACK}")
+                    ST.step("исполнитель", f"лимит {MODEL or 'основной модели'} → {nxt}")
+                MODEL, attempt = nxt, attempt - 1
                 continue
             raise ExecutorLimit(f"usage limit исполнителя (OpenCode{', ' + MODEL if MODEL else ''}): {lim}")
         texts, tools = [], 0
