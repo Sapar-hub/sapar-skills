@@ -166,14 +166,14 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
   (`--add` appends a line to the cell, which is how correspondence goes into N). `tracker.py add < row.json` writes a new row
   through the web app, or into the outbox when it is not configured or unreachable. `sheet.py flush` moves the outbox into the sheet.
 - **Tracker outbox.** When the web app is missing, headless runs leave rows in
-  `python3 -I scripts/tracker.py pending`. In an interactive session (the plugin's hook reports «в tracker-outbox N строк»),
+  `python3 -I scripts/tracker.py pending`. In an interactive session (the plugin's SessionStart hook reports «в tracker-outbox N строк»),
   write each row as above and then run `tracker.py done <id>`. Check that a row for the same company + role + date is not
   already in the sheet before writing.
 - **Close every apply with `python3 -I scripts/status.py`** (manual and auto mode alike, before you report «отправлено»).
   It reconciles applied.tsv, queue.tsv and applications/ with the sheet: (1) sent but missing from the tracker, (2) queue items
   NOT sent (paused/failed/new), (3) application folders with no outcome, (4) rows whose next-step date in F has come,
-  (5) open rows silent for >14 days. Section 1 must be empty when you finish. Report section 2 to the user as not sent. The plugin
-  hook prints the same counts on every prompt. Column E takes only `В процессе` / `Ожидание ответа` / `Закрыто` /
+  (5) open rows silent for >14 days. Section 1 must be empty when you finish. Report section 2 to the user as not sent. Nothing prints these
+  counts automatically; run it when needed. Column E takes only `В процессе` / `Ожидание ответа` / `Закрыто` /
   `Оффер получен`, because the Dashboard counts exact values. Details such as «скрининг пройден» go in D.
 - **Contacts right after the submit** (manual and auto mode alike). The day «написать» comes (`contacts.py due`,
   3 working days later), there must already be someone to write to. While the vacancy page is still open:
