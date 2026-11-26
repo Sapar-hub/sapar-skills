@@ -35,12 +35,12 @@ def norm_txt(s):
     return re.sub(r"[^0-9a-zа-яё]+", " ", (s or "").lower()).strip()
 
 
-def fetch_sheet():
+def fetch_sheet(timeout=60, budget=None):
     sys.path.insert(0, str(HERE))
     import sheet
     if not sheet.conf():
         return None
-    rows = sheet.call("find", query="", limit=1000)["rows"]
+    rows = sheet.call("find", query="", limit=1000, timeout=timeout, budget=budget)["rows"]
     CACHE.write_text(json.dumps({"ts": time.time(), "rows": rows}, ensure_ascii=False), encoding="utf-8")
     return rows
 

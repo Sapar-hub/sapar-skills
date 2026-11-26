@@ -28,7 +28,9 @@ def conf():
     return c if c.get("TRACKER_URL") and c.get("TRACKER_SECRET") else None
 
 
-def call(op, **kw):
+def call(op, timeout=60, budget=None, **kw):
+    """timeout — на одну попытку; budget — на все попытки чтения вместе (секунды), чтобы вызывающий
+    со своим жёстким лимитом (команда бота: 120 с) успел уйти в кэш, а не был убит."""
     c = conf()
     if not c:
         print(f"не настроено: нет {ENV} (TRACKER_URL, TRACKER_SECRET)", file=sys.stderr)
@@ -37,9 +39,15 @@ def call(op, **kw):
     req = urllib.request.Request(c["TRACKER_URL"], data=body, headers={"Content-Type": "application/json"})
     # Apps Script отвечает 302 на googleusercontent; urllib идёт туда GET'ом — там и лежит ответ.
     # Чтение повторяем при обрыве (прокси рвёт соединения); запись — нет: update --add мог уже пройти.
+    deadline = time.monotonic() + budget if budget else None
     for attempt in range(3 if op in ("find", "ping") else 1):
+        t = timeout
+        if deadline is not None:
+            t = min(timeout, deadline - time.monotonic())
+            if t < 5:
+                raise TimeoutError(f"таблица не ответила за {budget} с")
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=t) as r:
                 res = json.loads(r.read())
             break
         except (OSError, http.client.HTTPException):

@@ -38,8 +38,8 @@ def sheet_rows(max_age=900):
     rows, ts = S.cached_sheet() if hasattr(S, "cached_sheet") else (None, 0)
     if rows is None or time.time() - (ts or 0) > max_age:
         try:
-            rows = S.fetch_sheet() or rows
-        except Exception as e:                                     # нет сети — работаем по кэшу
+            rows = S.fetch_sheet(timeout=30, budget=75) or rows    # /cleanup в боте убивается через 120 с
+        except (Exception, SystemExit) as e:                       # нет сети — работаем по кэшу
             print(f"WARN: лист не обновлён ({e}); беру кэш", file=sys.stderr)
     return rows or []
 

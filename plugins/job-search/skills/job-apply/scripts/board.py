@@ -100,10 +100,11 @@ def sheet():
     if rows is not None and time.time() - ts < 120:               # только что читали — не дёргаем таблицу
         return rows, f"из таблицы, {time.strftime('%H:%M', time.localtime(ts))}"
     try:
-        fresh = S.fetch_sheet()
+        # tg-bridge убивает команду через 120 с (код 126): читаем не дольше 75 с, остальное — на кэш и отправку
+        fresh = S.fetch_sheet(timeout=30, budget=75)
         if fresh:
             return fresh, f"из таблицы, {time.strftime('%H:%M')}"
-    except Exception:
+    except (Exception, SystemExit):                              # sheet.call при ответе ok:false делает sys.exit
         pass
     when = time.strftime("%d.%m %H:%M", time.localtime(ts)) if rows else "—"
     return rows or [], f"КЭШ на {when}: таблица не ответила"
