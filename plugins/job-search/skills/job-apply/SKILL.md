@@ -78,7 +78,7 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
   - Statuses: `python3 -I scripts/hhstatus.py [--apply] [--tg]` reads hh «Отклики» (`hh.mjs negotiations`)
     and updates tracker rows linked by the hh vacancy id in I or N: a rejection closes an open row, an
     invitation sets «В процессе» + «⚠ ДЕЙСТВИЕ НУЖНО» in F, a view adds a line to N. The
-    `job-apply-hhstatus` timer (install-worker.sh, 10:43/15:43/20:43) runs it with `--apply --tg`. So
+    `job-apply-mailwatch` service runs it as soon as a letter from hh.ru arrives (Mail.ru often files those under «Спам»), and the `job-apply-hhstatus` timer (install-worker.sh, daily 20:43) runs it once a day for views. An «invitation» whose chat holds only the employer's auto-reply («отклик получен и направлен…») is noted in N, not flagged. So
     always put the hh link in I or N when applying on hh.
   - Mail statuses: `python3 -I scripts/mailstatus.py [--apply] [--tg] [--backtest N]` reads new Mail.ru
     letters over IMAP (read-only; folders «Отклики», INBOX, INBOX/Newsletters; creds MAILRU_USER/
@@ -87,7 +87,7 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
     interview/test/mail-confirmation sets «В процессе» + «⚠ ДЕЙСТВИЕ НУЖНО» in F (with the link TTL when
     the letter states one), an ack/recruiter reply adds a line to N. Ambiguous letters (several rows of
     one company, no title match) go only to the Telegram summary — rows are never touched on a guess.
-    The `job-apply-mailstatus` timer (install-worker.sh, hourly 08:17–23:17) runs it with `--apply --tg`;
+    `scripts/mailwatch.py` (service `job-apply-mailwatch`, IMAP IDLE on Отклики/INBOX/Newsletters + hh letters in «Спам») runs it with `--apply --tg` within a minute of a new letter; the `job-apply-mailstatus` timer (08:17, 20:17) is a backstop;
     read UIDs are stored in `mail-status.json` (first run only baselines, old letters are not processed).
   - Follow-up and closing (`job-apply-followup` timer, daily 13:37): `hhchat.py --apply --tg` writes the reminder into
     open hh chats (skips rows with a future date in F and rows emailed in the last 7 days), then

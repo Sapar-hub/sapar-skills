@@ -57,6 +57,25 @@ def negotiations():
     return json.loads(r.stdout)
 
 
+# «Приглашение» на hh иногда ставит робот работодателя вместе с шаблоном «отклик получен» (МТС, 27.11):
+# такое не помечаем «⚠ ДЕЙСТВИЕ НУЖНО», а только пишем в N. Настоящее приглашение — со словами про встречу.
+AUTOREPLY = re.compile(r"получен и направлен|процесс отбора .{0,40}может занять|мы свяжемся|рассмотрим ваш[ае]? (отклик|резюме)|"
+                       r"спасибо за (ваш )?отклик|голос за", re.I)
+REAL_INVITE = re.compile(r"собеседован|интервью (?!с ии)|созвон|встреч|тестов|zoom|телемост|meet\.|ссылк|"
+                         r"удобн\w* (время|дат)|в \d{1,2}[:.]\d{2}|завтра|понедельник|вторник|сред[ау]|четверг|пятниц", re.I)
+
+
+def invite_is_autoreply(vacancy_id):
+    """True — в чате только шаблон-автоответ без признаков встречи; при любой ошибке False (пусть человек посмотрит)."""
+    try:
+        r = subprocess.run(["node", str(HERE / "hh.mjs"), "chat", vacancy_id], capture_output=True, text=True,
+                           cwd=HERE, timeout=180)
+        tail = json.loads(r.stdout).get("tail", "")
+    except Exception:
+        return False
+    return bool(AUTOREPLY.search(tail)) and not REAL_INVITE.search(tail)
+
+
 def vid(u):
     m = re.search(r"hh\.ru/vacancy/(\d+)", u or "")
     return m.group(1) if m else ""
@@ -108,6 +127,9 @@ def main():
             if st == "rejection" and is_open:
                 d_col = v[3] if "отказ" in v[3].lower() else f"{v[3]}; отказ hh {ds}".lstrip("; ")
                 changes.append((row, {"E": "Закрыто", "F": "-", "D": d_col}, {"N": line}, f"{name}: отказ на hh ({ds}) → закрыто"))
+            elif st == "invitation" and is_open and invite_is_autoreply(i):
+                changes.append((row, {}, {"N": f"hh {ds}: «приглашение» — автоответ работодателя, встречи не назначено"},
+                                f"{name}: «приглашение» на hh ({ds}) — автоответ, не трогаю"))
             elif st == "invitation" and is_open:
                 changes.append((row, {"E": "В процессе", "F": f"⚠ ДЕЙСТВИЕ НУЖНО: приглашение на hh {ds} — ответить в чате hh {n['url']}"},
                                 {"N": line}, f"{name}: ПРИГЛАШЕНИЕ на hh ({ds})"))
