@@ -20,6 +20,7 @@
 // их ведём руками и сверяем с master.yaml. Отклик на hh — агентом через browser.mjs (см. SKILL.md).
 import { chromium } from 'playwright';
 import { claimBrowser } from './lock.mjs';
+import { closeHungTabs } from './cdp-health.mjs';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -49,11 +50,38 @@ function resolveTrack(map, track) {
 async function connect() {
   await claimBrowser(HOME);                         // headless-прогоны: браузер один, ждём своей очереди (lock.mjs)
   let browser;
+  await closeHungTabs(Number(process.env.JOB_APPLY_PORT || 9333));   // зависшая вкладка вешает connectOverCDP
   try { browser = await chromium.connectOverCDP(CDP); } catch { die('браузер не запущен: browser.mjs start'); }
   const ctx = browser.contexts()[0];
   const page = await ctx.newPage();                 // своя вкладка: полузаполненная форма в основной не страдает
   await page.setViewportSize({ width: 1366, height: 900 }).catch(() => {});
+  // id вкладки — чтобы закрыть её через HTTP CDP, если сама вкладка зависла (page.close тогда тоже висит)
+  try {
+    const s = await ctx.newCDPSession(page);
+    TAB_ID = (await s.send('Target.getTargetInfo')).targetInfo.targetId;
+    await s.detach().catch(() => {});
+  } catch {}
+  // сторож: команда не уложилась в HH_TIMEOUT (с) — закрыть свою вкладку и выйти, а не оставлять висящий таб
+  setTimeout(async () => {
+    console.error(`ERR: hh.mjs не уложился в ${WATCHDOG_S} с — закрываю свою вкладку`);
+    await dropTab();
+    process.exit(124);
+  }, WATCHDOG_S * 1000).unref();
   return { browser, page };
+}
+
+let TAB_ID = '';
+const WATCHDOG_S = Number(process.env.HH_TIMEOUT || 300);
+async function dropTab() {
+  if (!TAB_ID) return;
+  await fetch(`${CDP}/json/close/${TAB_ID}`, { signal: AbortSignal.timeout(5000) }).catch(() => {});
+}
+// закрыть свою вкладку и отключиться; зависшую вкладку — через HTTP CDP
+async function done(page, browser) {
+  const ok = await Promise.race([page.close().then(() => true, () => false),
+    new Promise((r) => setTimeout(() => r(false), 8000))]);
+  if (!ok) await dropTab();
+  await Promise.race([browser.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]);
 }
 
 async function open(page, url) {
@@ -183,7 +211,7 @@ async function listResumes() {
       return [...seen.entries()];
     });
     for (const [id, t] of rows) say(`${id}\t${t || '(без названия / черновик)'}`);
-  } finally { await page.close(); await browser.close(); }
+  } finally { await done(page, browser); }
 }
 
 // --- поиск вакансии на hh по должности и компании (второй канал к отклику на сайте работодателя) ---
@@ -227,7 +255,7 @@ async function find(title, company) {
     if (!scored.length) { say('NONE'); return; }
     for (const c of scored.slice(0, 3))
       say(`${c.responded ? 'APPLIED' : 'FOUND'}\thttps://hh.ru/vacancy/${c.id}\t${c.title}\t${c.employer}\t${c.score.toFixed(2)}`);
-  } finally { await page.close(); await browser.close(); }
+  } finally { await done(page, browser); }
 }
 
 // --- поиск: источник для дайджеста (job-digest/scripts/digest.py, ~/.config/job-digest/hh.txt) ---
@@ -256,7 +284,7 @@ async function search({ text, days = '1', area = '1', exp = 'noExperience' }) {
       for (const c of cards) if (!seen.has(c.id)) { seen.add(c.id); out.push({ ...c, url: `https://hh.ru/vacancy/${c.id}` }); }
       if (cards.length < 50) break;
     }
-  } finally { await page.close(); await browser.close(); }
+  } finally { await done(page, browser); }
   say(JSON.stringify(out));
 }
 
@@ -284,7 +312,7 @@ async function negotiations(asJson) {
       const more = await page.locator('[data-qa="pager-next"]').count();
       if (!more) break;
     }
-  } finally { await page.close(); await browser.close(); }
+  } finally { await done(page, browser); }
   // «discard» = отказ; приглашение/собеседование/выход — всё, что зовёт дальше
   const status = (x) => x.tag === 'discard' ? 'rejection'
     : /invit|interview|hired|offer|phone/.test(x.tag) || /Приглаш|Invitation|Interview|Собесед|Выход|Work start/i.test(x.tagText) ? 'invitation'
@@ -334,7 +362,7 @@ async function chat(vid, sendText) {
       res.sent = after.includes(clean(sendText).slice(0, 40)) && (await ta.first().inputValue().catch(() => 'x')) === '';
     }
   } finally {
-    await page.close(); await browser.close();
+    await done(page, browser);
     say(JSON.stringify(res));
   }
 }
@@ -379,7 +407,7 @@ if (cmd === 'chat') {
     await syncAbout(page, id, text);
     await syncSkills(page, id, skills);
     say('OK');
-  } finally { await page.close(); await browser.close(); }
+  } finally { await done(page, browser); }
 } else if (cmd === 'find') {
   const opt = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : ''; };
   if (!opt('--title') || !opt('--company')) die('hh.mjs find --title <должность> --company <компания>');

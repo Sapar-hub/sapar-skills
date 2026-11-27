@@ -396,6 +396,10 @@ def run(key):
         kind = r.split()[0] if r else ""
         # paused — только когда ждём человека у открытой формы; сбой разведки очередь не держит
         status = {"closed": "skipped", "blacklist": "skipped", "dup": "skipped", "not_found": "skipped"}.get(kind, "failed")
+        # «не нашёл», потому что браузер не подключился (зависшая вкладка, CDP) — сбой, а не вердикт по вакансии:
+        # skipped тут молча терял нормальные вакансии (27.11 — 7 штук за утро)
+        if kind == "not_found" and re.search(r"браузер не (запущен|подключ|запуска)|CDP|connectOverCDP", out + r):
+            status = "failed"
         if not r:                                                 # бюджет/время кончились без вердикта
             return "failed", f"разведка без итога ({last_line(out, 'TIMEOUT') or 'нет ответа'}): вакансию у работодателя не нашёл"
         return status, f"разведка: {r}"

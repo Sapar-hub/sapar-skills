@@ -22,6 +22,7 @@
 //   browser.mjs back | wait <ms>
 import { chromium } from 'playwright';
 import { claimBrowser, needToken, useToken, IS_SUBMIT_JS, ENTER_SUBMITS_JS, SUBMIT_RE } from './lock.mjs';
+import { closeHungTabs } from './cdp-health.mjs';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, openSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -113,6 +114,7 @@ async function rememberTab(ctx, page) {
 async function connect() {
   await claimBrowser(HOME);                         // эксклюзивный режим (JOB_APPLY_PARALLEL=0) — ждём своей очереди
   let browser;
+  await closeHungTabs(PORT);                        // зависшая вкладка иначе вешает connectOverCDP навсегда
   try { browser = await chromium.connectOverCDP(CDP); } catch { die('браузер не запущен: browser.mjs start'); }
   const ctx = browser.contexts()[0];
   const pages = ctx.pages();
@@ -249,10 +251,21 @@ async function oopifAct(page, ref, action, value) {
 // живой ли браузер на CDP. HTTP с жёстким таймаутом: зависший Chromium принимает соединение и молчит,
 // а connectOverCDP свой timeout в этом случае не соблюдает
 async function cdpAlive(ms = 5000) {
+  let ws;
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}/json/version`, { signal: AbortSignal.timeout(ms) });
-    return r.ok;
-  } catch { return false; }
+    if (!r.ok) return false;
+    // HTTP-эндпоинт отвечает и тогда, когда сам браузер завис (connectOverCDP висит на «ws connected»):
+    // спрашиваем Browser.getVersion по websocket с тем же таймаутом
+    const { webSocketDebuggerUrl } = await r.json();
+    ws = new WebSocket(webSocketDebuggerUrl);
+    return await new Promise((resolve) => {
+      const t = setTimeout(() => resolve(false), ms);
+      ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: 'Browser.getVersion' }));
+      ws.onmessage = (e) => { try { if (JSON.parse(e.data).id === 1) { clearTimeout(t); resolve(true); } } catch {} };
+      ws.onerror = () => { clearTimeout(t); resolve(false); };
+    });
+  } catch { return false; } finally { try { ws?.close(); } catch {} }
 }
 
 // процессы Chromium именно этого профиля и порта (по /proc, без pkill по шаблону) → SIGKILL; -> сколько убито
@@ -290,7 +303,7 @@ async function retry(fn, page) {
 const cmds = {
   async start(args) {
     mkdirSync(join(HOME, 'profile'), { recursive: true });
-    if (await cdpAlive()) return console.log('OK: уже запущен');
+    if (await cdpAlive()) { await closeHungTabs(PORT); return console.log('OK: уже запущен'); }
     // порт не отвечает, а процесс жив (Xvfb умер под окном → Chromium висит): без этого connect ждал бесконечно
     if (killStale()) await new Promise((r) => setTimeout(r, 1500));
     const flags = [`--remote-debugging-port=${PORT}`, '--remote-debugging-address=127.0.0.1',
