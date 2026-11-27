@@ -14,6 +14,10 @@
 //   hh.mjs chat <id вакансии> [--send-file F]   чат с работодателем по отклику, JSON {found, open, remind, tail, chat,
 //                                                sent}: open — есть поле ввода (работодатель не закрыл переписку);
 //                                                --send-file — отправить текст из файла (только если open)
+//   hh.mjs chats                                все чаты hh.ru/chat (список слева), JSON [{chat, title, company, time,
+//                                                last, mine}]: mine — последнее сообщение моё (есть значок доставки)
+//   hh.mjs messages <id чата>...                сообщения чатов, JSON [{chat, vacancy, messages: [{id, out, time, text}]}]
+//                                                (out — исходящее; служебные маркеры без текста пропущены)
 //
 // Что синхронизируется: per-resume поля hh — «Обо мне» (about + проекты + публикации), ключевые навыки,
 // уровень дохода (всегда пусто). Название/профессия, опыт, образование, контакты — общие в профиле hh,
@@ -367,6 +371,62 @@ async function chat(vid, sendText) {
   }
 }
 
+// --- все чаты (hh.ru/chat): список слева, последнее сообщение каждого; дочитываем прокруткой ---
+async function chats() {
+  const { browser, page } = await connect();
+  let rows = [];
+  try {
+    await open(page, 'https://hh.ru/chat');
+    await page.locator('[data-qa^="chatik-open-chat-"]').first().waitFor({ timeout: 20000 }).catch(() => {});
+    // список виртуальный: при прокрутке верхние ячейки размонтируются — собираем на каждом шаге, по id
+    const seen = new Map();
+    const grab = () => page.evaluate(() => [...document.querySelectorAll('[data-qa^="chatik-open-chat-"]')].map((e) => {
+      const t = (q) => (e.querySelector(`[data-qa="${q}"]`)?.innerText || '').trim();
+      return { chat: e.getAttribute('data-qa').replace('chatik-open-chat-', ''), title: t('chat-cell-title'),
+        company: t('chat-cell-subtitle'), time: t('chat-cell-meta'), last: t('chat-cell-last-message'),
+        mine: !!e.querySelector('[data-qa^="status-icon-"]') };
+    }));
+    for (let i = 0, still = 0; i < 40 && still < 2; i++) {
+      const before = seen.size;
+      for (const c of await grab()) if (!seen.has(c.chat)) seen.set(c.chat, c);
+      still = seen.size === before ? still + 1 : 0;
+      await page.evaluate(() => {
+        const cells = document.querySelectorAll('[data-qa^="chatik-open-chat-"]');
+        (document.querySelector('[data-qa="chats-list-skeleton-wrapper"]') || cells[cells.length - 1])?.scrollIntoView();
+      });
+      await page.waitForTimeout(1500);
+    }
+    rows = [...seen.values()];
+  } finally { await done(page, browser); }
+  say(JSON.stringify(rows));
+}
+
+// --- сообщения чатов: id сообщения, исходящее или нет, время, текст; ссылка на вакансию из шапки ---
+async function messages(ids) {
+  const { browser, page } = await connect();
+  const out = [];
+  try {
+    for (const id of ids) {
+      await open(page, `https://hh.ru/chat/${id}`);
+      await page.locator('[data-qa="chatik-header-vacancy-link"], [data-qa="chatik-message-input"]').first()
+        .waitFor({ timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(1500);                       // переписка дорисовывается
+      out.push(await page.evaluate((chat) => {
+        const l = document.querySelector('[data-qa="chatik-header-vacancy-link"]');
+        const ms = [...document.querySelectorAll('[data-qa^="chatik-chat-message-"]')]
+          .filter((e) => /^chatik-chat-message-\d+$/.test(e.getAttribute('data-qa')))
+          .map((e) => ({ id: e.getAttribute('data-qa').split('-').pop(), out: !!e.querySelector('[class*="outgoing"]'),
+            time: (e.querySelector('[data-qa="chat-bubble-display-time"]')?.innerText || '').trim(),
+            text: [...e.querySelectorAll('[data-qa="chat-bubble-text"]')].map((x) => x.innerText).join('\n')
+              .replace(/\n{2,}/g, '\n').trim() }))
+          .filter((m) => m.text);
+        return { chat, vacancy: (l?.href.match(/\/vacancy\/(\d+)/) || [])[1] || '', messages: ms };
+      }, id));
+    }
+  } finally { await done(page, browser); }
+  say(JSON.stringify(out));
+}
+
 const [cmd, ...args] = process.argv.slice(2);
 if (cmd === 'chat') {
   const vid = (args[0] || '').match(/\d+/)?.[0];
@@ -418,6 +478,12 @@ if (cmd === 'chat') {
   await search({ text: opt('--text'), days: opt('--days', '1'), area: opt('--area', '1'), exp: opt('--exp', 'noExperience') });
 } else if (cmd === 'negotiations') {
   await negotiations(args.includes('--json'));
+} else if (cmd === 'chats') {
+  await chats();
+} else if (cmd === 'messages') {
+  const ids = args.map((a) => a.match(/\d+/)?.[0]).filter(Boolean);
+  if (!ids.length) die('hh.mjs messages <id чата>...');
+  await messages(ids);
 } else {
-  die('команды: resumes | map | sync <track> <tailored.yaml> [--dry] | find --title T --company C | search --text Q | negotiations [--json]');
+  die('команды: resumes | map | sync <track> <tailored.yaml> [--dry] | find --title T --company C | search --text Q | negotiations [--json] | chats | messages <id чата>... | chat <id вакансии>');
 }

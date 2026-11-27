@@ -77,7 +77,10 @@ popup): close that first. Refs `f2e5` point into iframes (embedded ATS forms).
     menu), ask the user to log in again in the open window (`goto https://hh.ru/account/login`).
   - Statuses: `python3 -I scripts/hhstatus.py [--apply] [--tg]` reads hh «Отклики» (`hh.mjs negotiations`)
     and updates tracker rows linked by the hh vacancy id in I or N: a rejection closes an open row, an
-    invitation sets «В процессе» + «⚠ ДЕЙСТВИЕ НУЖНО» in F, a view adds a line to N. The
+    invitation sets «В процессе» + «⚠ ДЕЙСТВИЕ НУЖНО» in F, a view adds a line to N. It also reads hh chats (`hh.mjs chats` → `messages`, only chats whose last
+    message changed): a new employer message, even one already read by hand, adds a line to N; a meeting/test/question
+    sets «В процессе» + «⚠ ДЕЙСТВИЕ НУЖНО»; a rejection-like or unclear text also goes to the TG summary (the row is not
+    closed on text). Chat state is `_chats` in hh-status.json; the first run only records a watermark. The
     `job-apply-mailwatch` service runs it as soon as a letter from hh.ru arrives (Mail.ru often files those under «Спам»), and the `job-apply-hhstatus` timer (install-worker.sh, daily 20:43) runs it once a day for views. An «invitation» whose chat holds only the employer's auto-reply («отклик получен и направлен…») is noted in N, not flagged. So
     always put the hh link in I or N when applying on hh.
   - Mail statuses: `python3 -I scripts/mailstatus.py [--apply] [--tg] [--backtest N]` reads new Mail.ru
