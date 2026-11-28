@@ -10,7 +10,7 @@ UNIT_DIR=$HOME/.config/systemd/user
 ONCALENDAR=${ONCALENDAR:-'*-*-* 10:30'}
 TOPICS_ONCALENDAR=${TOPICS_ONCALENDAR:-'*-*-* 21:47'}
 # статусы откликов hh → трекер, сводка в Telegram (job-apply-hhstatus)
-HH_ONCALENDAR=${HH_ONCALENDAR:-'*-*-* 20:43:00'}   # раз в день — просмотры; отказы/приглашения ловит mailwatch по письму hh
+HH_ONCALENDAR=${HH_ONCALENDAR:-'*-*-* 10,15,20:43:00'}   # 3 раза в день: hh писем на Mail.ru не шлёт, mailwatch по письму hh почти не срабатывает
 # письма о статусах (Mail.ru IMAP) → трекер, сводка в Telegram (job-apply-mailstatus)
 MAIL_ONCALENDAR=${MAIL_ONCALENDAR:-'*-*-* 08,20:17:00'}   # подстраховка: основной путь — mailwatch (IMAP IDLE)
 # напоминание в открытые чаты hh + автозакрытие после игнора (hhchat.py, autoclose.py)
